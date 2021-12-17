@@ -1,0 +1,110 @@
+---
+title: "Experiment 1: mapping"
+author: "Joe Skufca"
+date:  "2021-10-26"
+output: html_notebook
+---
+
+A first attempt to map the farm locations.
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 6
+)
+``` 
+## Packages
+
+```{r}
+
+library(tmap)
+library(tmaptools)
+library(sf)
+library(leaflet)
+library(readxl)
+library(janitor)
+
+library(tidyverse)
+```
+
+
+
+## Load data
+
+From the file provided by Cornell:
+
+```{r}
+file_farms=here::here("data","SHEEP demographics with  NO NAMES.xlsx")
+df1=read_excel(file_farms) %>% clean_names()  %>% drop_na(address) %>%
+  mutate(sampled=case_when(
+    sampled=="YES" ~ 1,
+    sampled=="N" ~ 0
+  ), johnes=str_to_lower(johnes))
+
+
+```
+
+
+
+
+### Geocoding with `hereR`
+
+```{r}
+library(hereR)
+set_key("3AbZA9I7RALc6NGEqy5jX9HXyW0_pciFFwrS8DF1s6M")
+
+```
+
+
+
+```{r}
+dfh=geocode(df1$address)
+```
+
+Since df1 and dfh have sam number of rows, we may join into a single `sf` object.
+
+```{r}
+df_j=bind_cols(dfh,df1)
+
+```
+
+## Let's use tmap to build a bubble map on the joined dataset, with a leaflet background.
+
+
+```{r, results='asis'}
+tmap_mode("view")
+tm_shape(df_j)+tm_symbols("total_herd_size",
+                          col="johnes",
+                          id="total_herd_size")
+```
+
+
+## Let's visualize by town
+
+```{r}
+library(tidycensus)
+```
+
+Get county data for NYS and spatially join the farm data:
+
+```{r include=FALSE}
+#ny <-tigris::counties(state="NY")
+ny=tigris::county_subdivisions('NY')
+ny=st_transform(ny,4326)
+ny_j=st_join(ny,df_j,left=TRUE) %>% drop_na(total_herd_size)
+
+```
+
+Let's try to use dplyr methods to aggregate and visualize total count of farms:
+
+```{r, results='asis'}
+df4=ny_j %>% group_by(NAME) %>% summarise(farms=n(),
+                                          total_herd=sum(total_herd_size),
+                                          mean_exper=mean(years_expierence)) 
+
+tm_shape(df4) +tm_polygons(col=c("total_herd","farms","mean_exper"),id="NAME") +tm_facets(ncol=3)
+```
+
+
+
+
+
