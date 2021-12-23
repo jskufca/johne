@@ -1,0 +1,73 @@
+---
+title: "Using `rater` package to analyze"
+author: "Joe Skufca"
+date:  "2021-12-22"
+output: 
+    html_notebook:
+       toc: true
+---
+
+This experiment intends to use a commands from the `rater` package to analyze data for classes.  It likely provides less direct information for sensitivity and specificity, but will predict class for each animal.
+
+### Setup
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( fig.width = 6,highlight=T)
+
+library(tidyverse)
+library(janitor)
+
+
+library(rater)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+```
+
+## Example 1
+
+We will analyze the goat data, but without a heirarchical model (so no need to include which farm).
+
+### Data
+
+```{r}
+goat_file=here("data","goat_results.xlsx")
+
+goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
+     clean_names() %>% 
+     select(sample_number,elisa,pcr,culture) %>%
+     filter(elisa  %in% c("p","n")) %>%
+     filter(culture %in% c("p","n")) %>% 
+     mutate(across(elisa:culture, ~ (.x == "p")+1)) %>%
+     #slice(240:250) %>%
+     pivot_longer(elisa:culture,names_to="test",values_to = "result") %>%
+     mutate(test=case_when(
+          test=="elisa" ~ 1,
+          test=="pcr" ~ 2,
+          test=="culture" ~3
+     )) 
+
+names(goat)=c("item","rater","rating")
+
+
+```
+
+### fitting the model
+
+```{r}
+fit1=goat %>% rater(model="dawid_skene")
+```
+
+### visualize results
+
+```{r}
+class_probabilities(fit1)
+p=plot(fit1, "latent_class")
+plotly::ggplotly(p)
+```
+
+
