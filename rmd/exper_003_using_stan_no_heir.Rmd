@@ -85,7 +85,12 @@ data2= list(I=316,
 fit2=stan(file=here("src","multi_test_spec_sens_prev.stan"),data=data2)
 ```
 
-### visualize results
+###  results
+
+```{r}
+df_sum=summary(fit2)
+```
+
 
 
 

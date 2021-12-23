@@ -29,7 +29,6 @@ parameters {
 transformed parameters{
   simplex[2] theta[J,2];
   vector[2] log_q_z[I];
-  vector[2] z[I];
   for (j in 1:J){
     theta[j,1]=[spec[j],1-spec[j]]';
     theta[j,2]=[sens[j],1-sens[j]]';
@@ -40,8 +39,6 @@ transformed parameters{
          for (k in 1:2)
            log_q_z[i,k]=log_q_z[i, k]+log(theta[j, k, y[i, j]]);
   }
-  for (i in 1:I)
-    z[i]=softmax(log_q_z[i]);
 }
 model {
   for (j in 1:J){
@@ -51,4 +48,8 @@ model {
   for (i in 1:I)
     target += log_sum_exp(log_q_z[i]);
 }
-
+generated quantities {
+  vector[2] z[I];
+  for (i in 1:I)
+    z[i]=softmax(log_q_z[i]);
+}
