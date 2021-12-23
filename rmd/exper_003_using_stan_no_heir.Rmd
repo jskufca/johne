@@ -1,0 +1,92 @@
+---
+title: "Using stan without heirarchical model"
+author: "Joe Skufca"
+date:  "2021-12-23"
+output: 
+    html_notebook:
+       toc: true
+---
+
+This experiment intends to use a commands from the `rater` package to analyze data for classes.  It likely provides less direct information for sensitivity and specificity, but will predict class for each animal.
+
+### Setup
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( fig.width = 6,highlight=T)
+
+library(tidyverse)
+library(janitor)
+
+
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+```
+
+## Example 1
+
+We will analyze the goat data, but without a heirarchical model (so no need to include which farm).
+
+### Data
+
+Load data
+
+
+```{r}
+goat_file=here("data","goat_results.xlsx")
+
+goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
+     clean_names() %>% 
+     select(sample_number,elisa,pcr,culture) %>%
+     filter(elisa  %in% c("p","n")) %>%
+     filter(culture %in% c("p","n")) %>% 
+     mutate(across(elisa:culture, ~ (.x == "p")+1)) 
+
+
+```
+
+### Assemble Stan model data
+
+For multi_test_spec_sens_prev.stan:
+
+>   int<lower=1> I; //number of animals tested
+>   int<lower=1> J; // number of tests - 3 for our work
+>   
+>      
+>   int<lower=0,upper=1> y[I,J]; // test resuls  1/0
+> 
+>   // params for prior
+>   row_vector<lower=0>[J] alpha_sens;
+>   row_vector<lower=0>[J] beta_sens;
+>   row_vector<lower=0>[J] alpha_spec;
+>   row_vector<lower=0>[J] beta_spec;
+
+
+
+```{r}
+data2= list(I=316,
+            J=3,
+            y=as.matrix(goat %>% select(2:4)),
+            alpha_sens = c(167,167,167),
+            beta_sens = c(43,43,43),
+            alpha_spec = c(43,43,43),
+            beta_spec= c(5.62,5.62,5.62)
+                    )
+```
+
+
+### fitting the model
+
+```{r}
+fit2=stan(file=here("src","multi_test_spec_sens_prev.stan"),data=data2)
+```
+
+### visualize results
+
+
+
+
