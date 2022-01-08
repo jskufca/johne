@@ -30,4 +30,3 @@ model {
   spec ~ beta(alpha_spec, beta_spec);
   sens ~ beta(alpha_sens, beta_sens);
 }
-

@@ -11,7 +11,7 @@
 
 // The input data assumes global pooling, with some number of positive results y from sample of size n.
 data {
-  // K=2 classes, negative (0) and positive (1)
+  // K=2 classes, negative (1) and positive (2)
   int<lower=1> I; //number of animals tested
   int<lower=1> J; // number of tests - 3 for our work
   int<lower=1,upper=2> y[I,J]; // test resuls  1 for neg, 2 for pos

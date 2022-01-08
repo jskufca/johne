@@ -12,6 +12,7 @@ This experiment intends to use a simple stan model that will give prevelance, sp
 ### Setup
 
 ```{r setup}
+
 options(digits = 3)
 knitr::opts_chunk$set( fig.width = 6,highlight=T)
 

@@ -1,0 +1,156 @@
+---
+title: "Using stan with heirarchical model"
+author: "Joe Skufca"
+date:  "2021-12-23"
+output: 
+    html_notebook:
+       toc: true
+---
+
+This experiment intends to analyze data from each farm as a herd, with common specificity and sensititive.  We assume on a single test (for which I will use the culture data)    The dataset of focus here is the "goat" dataset.
+
+### Setup
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( fig.width = 6,highlight=T)
+
+library(tidyverse)
+library(janitor)
+library(PriorGen)
+
+
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+library(tidybayes)
+```
+
+## Example 1
+
+We will analyze the goat data, but without a heirarchical model (so no need to include which farm).
+
+### Data
+
+Load data.  We eliminate the one sample that was questionable.
+
+
+```{r}
+goat_file=here("data","goat_results.xlsx")
+
+goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
+     clean_names() %>%
+     select(sample_number,farm_number,  elisa, pcr, culture) %>%
+     filter(elisa  %in% c("p", "n")) %>%
+     filter(culture %in% c("p", "n")) %>%
+     mutate(across(elisa:culture, ~ (.x == "p") + 0)) 
+
+
+```
+
+### Assemble Stan model data
+
+In addition to the data, we need information for prior assumptions regarding sensitivity and specificity.
+
+```{r}
+goat_sum=goat %>% rowid_to_column("id") %>% group_by(farm_number) %>%
+     summarise(i_s=first(id),i_e=last(id))
+```
+
+
+
+
+```{r}
+data1= list(F=27,
+            I=316,
+            I_s=goat_sum$i_s,
+            I_e=goat_sum$i_e,
+            y=goat$culture,
+            alpha_sens = 5,
+            beta_sens = 7,
+            alpha_spec = 1500,
+            beta_spec= 7
+                    )
+
+# int<lower=1> F; //number of farms
+#   int<lower=1> I; //total number of animals tested
+#   int<lower=1> I_s[F]; //starting index for animals from from f
+#   int<lower=1> I_e[F]; //ending index for animals from from f
+# 
+#   int<lower=1,upper=2> y[I]; // test resuls  0 for neg, 1 for pos
+#   // params for prior for sensitivities and specificities
+#   real<lower=0> alpha_sens;
+#   real<lower=0> beta_sens;
+#   real<lower=0> alpha_spec;
+#   real<lower=0> beta_spec;
+```
+
+
+### fitting the model
+
+```{r}
+fit1=stan(file=here("src","heir_single_test.stan"),data=data1,
+          warmup=500,chains=12,iter=3000)
+```
+
+###  Visualizing results
+
+```{r}
+posterior=as.matrix(fit1)
+```
+
+
+Prevalence
+
+```{r}
+plot_title <- ggtitle("Posterior distributions",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior,prob=.8,pars="HTP")
+
+
+```
+
+```{r}
+summary(fit1)
+```
+
+### Which farms?
+
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("CWHP"))
+```
+### Farm Level prevelence
+
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("HID\\[1[0-9],1"))
+```
+
+
+### Chain mixing
+
+```{r}
+plot(fit1, plotfun = "trace", pars = c("beta1"), inc_warmup = TRUE)
+plot(fit1, plotfun = "rhat")
+```
+
+
+```{r}
+
+mcmc_intervals(posterior,regex_pars=c("eta"))
+
+```
+
+
+
+########################
+
+
+
+
+
+
+
+
