@@ -1,7 +1,9 @@
 //
 // This Stan program defines a simple model 
 // that will examine specificity, sensitivy, and prevalence by farm
-// with multiple tests  
+// with multiple tests
+// 
+// Version B use parameterization of between farm variation using beta distribution
 //
 // allowing that some farms are disease free.
 // 
@@ -12,7 +14,7 @@
 //
 // Ottawa paper
 // and 
-// model from Ozsvari et al
+// model of between farm variabiliy as in Liapi et all (2011)
 
 
 
@@ -31,53 +33,29 @@ data {
   row_vector<lower=0>[J] beta_sens;
   row_vector<lower=0>[J] alpha_spec;
   row_vector<lower=0>[J] beta_spec;
-  real htp_alpha;
-  real htp_beta;
-  real b1_mu;
-  real b1_sd;
-  real eta_mu;
-  real eta_sd;
+  real htp_alpha; // prior  (HTP is tau from Liapi)
+  real htp_beta; // prior
+  real mu_alpha;// prior
+  real mu_beta;// prior
+  real psi_a;// prior
+  real psi_b;// prior
   // more prior for heirarchical and for prev and none mixture
-  
   
   
 }
 parameters {
-  real beta1;  // population level parameter
-  real eta[F]; // Herd level random effects
+     real<lower=0, upper=1> CWHP[F]; // equivalent of pi_star[k]
+  real<lower=0, upper=1> mu; // mean true prevalence of infected herds
+  real<lower=0> psi; //variability parameter for prev
 //  real<lower=0> sigmasq; // Variance of the herd level random effects
-  real<lower=0.001, upper=0.999> HTP; // Herd true prevalence  
+  real<lower=0, upper=1> HTP; // Herd true prevalence  
      
   real<lower=0, upper=1> spec[J];
   real<lower=0, upper=1> sens[J];
 }
 
 
-
-// transformed parameters {
-//   real<lower=0> sigma; // Standard deviation of the herd level random effects
-// 
-//   sigma = sqrt(sigmasq);
-// }
-
-
-// transformed parameters{
-//   simplex[2] theta[J,2];
-//   vector[2] log_q_z[I];
-//   for (j in 1:J){
-//     theta[j,1]=[spec[j],1-spec[j]]';
-//     theta[j,2]=[sens[j],1-sens[j]]';
-//   }
-//   for (i in 1:I){
-//        log_q_z[i]=log(pi);
-//        for (j in 1:J)
-//          for (k in 1:2)
-//            log_q_z[i,k]=log_q_z[i, k]+log(theta[j, k, y[i, j]]);
-//   }
-// }
 model {
-     vector[F] CWHP1; // Conditional within-herd animal-level prevalence 
-  
   real pi1;    // Apparent prevalence 
   real t1;
   real t2;  
@@ -87,10 +65,11 @@ model {
        spec[j] ~ beta(alpha_spec[j], beta_spec[j]);
        sens[j] ~ beta(alpha_sens[j], beta_sens[j]);
   }
-  beta1  ~ normal(b1_mu, b1_sd);
-  eta ~ normal(eta_mu, eta_sd); // Vectorized
-  
-  HTP ~ beta(htp_alpha, htp_beta); // 
+  HTP ~ beta(htp_alpha, htp_beta); 
+  mu ~ beta(mu_alpha, mu_beta);
+  psi ~ gamma(psi_a, psi_b);
+  CWHP ~ beta(mu*psi,psi*(1-mu));
+//  eta ~ normal(eta_mu, eta_sd); // Vectorized
   
   
   // primary loop through farms
@@ -98,14 +77,12 @@ model {
   for (n in 1:F) {
     t1 = 0; // Loglikelihood component if herd n is supposed to be infected
     t2 = 0; // Loglikelihood component if herd n is not supposed to be infected
-    CWHP1[n] = inv_logit(beta1+eta[n]);
-
-
+    
     // for each animal in the herd
     for (k in I_s[n]:I_e[n]) {
          
          for (j in 1:J) {     // for each test
-              pi1   = sens[j]*CWHP1[n] + (1-spec[j])*(1-CWHP1[n]);// Apparent prevalence
+              pi1   = sens[j]*CWHP[n] + (1-spec[j])*(1-CWHP[n]);// Apparent prevalence
               t1 += bernoulli_lpmf( y[k,j] |  pi1);
               t2 += bernoulli_lpmf( y[k,j] |  1-spec[j]);
          }
@@ -118,11 +95,14 @@ model {
   
 }
 generated quantities {
-     vector[F] CWHP; //conditional within herd prevalence
-     vector[F] EWHP; // expectation of within herd prevalece
+     
+     real InfP=0; // average prev in an infected herd
+     
      real pi1;
      real t1;
      real t2;
+     real d1=0; // normalizing constant
+     
      
   vector[2] HID[F]; //Herd Infection distribution
   vector[2] thismix;
@@ -130,9 +110,7 @@ generated quantities {
   for (n in 1:F) {
     t1 = 0; // Loglikelihood component if herd n is supposed to be infected
     t2 = 0; // Loglikelihood component if herd n is not supposed to be infected
-    CWHP[n] = inv_logit(beta1+eta[n]);
-
-
+   
     // for each animal in the herd
     for (k in I_s[n]:I_e[n]) {
          
@@ -143,9 +121,11 @@ generated quantities {
          }
     }
 
-    thismix=[HTP * t1, (1-HTP) * t2 ]';
+    thismix=[log(HTP) + t1, log(1-HTP) + t2 ]';
     HID[n] = softmax(thismix);
-    EWHP[n]=HID[n,1]*CWHP[n];
+    InfP += HID[n,1]*CWHP[n];
+    d1 += HID[n,1];
+    
   }
-
+InfP = InfP/d1;
 }
