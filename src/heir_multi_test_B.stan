@@ -103,8 +103,8 @@ generated quantities {
      real t2;
      real d1=0; // normalizing constant
      
-     
-  vector[2] HID[F]; //Herd Infection distribution
+  vector[2] this_hid; //   
+  real HIP[F]; //Herd Infection distribution
   vector[2] thismix;
   
   for (n in 1:F) {
@@ -122,10 +122,10 @@ generated quantities {
     }
 
     thismix=[log(HTP) + t1, log(1-HTP) + t2 ]';
-    HID[n] = softmax(thismix);
-    InfP += HID[n,1]*CWHP[n];
-    d1 += HID[n,1];
-    
+    this_hid = softmax(thismix);
+    InfP += this_hid[1]*CWHP[n];
+    d1 += this_hid[1];
+    HIP[n]=this_hid[1];
   }
 InfP = InfP/d1;
 }

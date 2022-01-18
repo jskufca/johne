@@ -141,8 +141,8 @@ mcmc_areas_ridges(posterior,regex_pars=c("CWHP"))
 ```
 ### Farm Level prevelence
 
-```{r}
-mcmc_areas_ridges(posterior,regex_pars=c("HID\\[[1-9],1"))
+```{r fig.height=18in}
+mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:21,23:27))))
 ```
 ```{r}
 mcmc_areas_ridges(posterior,regex_pars=c("sens"))
