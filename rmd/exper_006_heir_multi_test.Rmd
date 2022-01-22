@@ -1,10 +1,13 @@
 ---
 title: "Using stan with heirarchical model"
 author: "Joe Skufca"
-date:  "2021-12-23"
-output: 
-    html_notebook:
-       toc: true
+date: '2021-12-23'
+output:
+  html_notebook:
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
 ---
 
 Experiment 6 uses re-parameterization of between herd prevalence using a more standard approach (with beta distribution) from Liapi et al (2011). This experiment intends to analyze data from each farm as a herd, with common specificity and sensititive.  We assume on a single test (for which I will use the culture data)    The dataset of focus here is the "goat" dataset.
@@ -58,7 +61,8 @@ In addition to the data, we need information for prior assumptions regarding sen
 
 ```{r}
 goat_sum=goat %>% rowid_to_column("id") %>% group_by(farm_number) %>%
-     summarise(i_s=first(id),i_e=last(id))
+     summarise(i_s=first(id),i_e=last(id),n=n(),across(elisa:culture,sum))
+goat_sum
 ```
 
 
@@ -130,7 +134,7 @@ mcmc_areas(posterior,prob=.8,pars="HTP")
 ```
 
 ```{r}
-summary(fit5)
+#summary(fit5)
 #mcmc_areas(posterior,prob=.8,pars="beta1")
 ```
 
@@ -141,12 +145,18 @@ mcmc_areas_ridges(posterior,regex_pars=c("CWHP"))
 ```
 ### Farm Level prevelence
 
-```{r fig.height=18in}
-mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:21,23:27))))
+```{r fig.height=10}
+mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:13))))
+
+
 ```
+
 ```{r}
-mcmc_areas_ridges(posterior,regex_pars=c("sens"))
-mcmc_areas_ridges(posterior,regex_pars=c("spec"))
+mcmc_areas_ridges(posterior,regex_pars=c("sens"))+
+     scale_y_discrete(labels=c("sens_elisa","sens_pcr","sens_cult"))
+
+mcmc_areas_ridges(posterior,regex_pars=c("spec"))+
+     scale_y_discrete(labels=c("spec_elisa","spec_pcr","spec_cult"))
 ```
 
 
