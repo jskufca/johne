@@ -3,11 +3,14 @@ title: "Using stan with heirarchical model"
 author: "Joe Skufca"
 date: '2022-01-19'
 output:
-  word_document:
-    toc: yes     
   powerpoint_presentation:
     slide_level: 3
-
+  html_notebook:
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
+    code_folding: hide
 
     
 ---
@@ -63,8 +66,7 @@ Load data.  We eliminate the one sample that was questionable.
 ```{r message=FALSE, warning=FALSE, results="asis"}
 goat_file=here("data","goat_results.xlsx")
 
-#goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
-goat = readxl::read_excel(goat_file, sheet = "surrogate_data_1") %>%
+goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
      clean_names()%>% mutate(sex=str_to_lower(sex)) %>%
      mutate(sex=case_when(
           str_starts(sex,"f") ~ "f",
@@ -254,12 +256,12 @@ Herd True Prevalence (HTP) is the fraction of herd with at least one infected an
 plot_title <- ggtitle("Herd Level Prevalence",
                       "with medians and 80% intervals")
 mcmc_areas(posterior,prob=.8,pars="HTP") + plot_title
-#ggsave(filename=here("figs","HTP_goat.png"), width=10,height=8,units="cm"   )
+
 ```
 For a particular parameter, we can ask for detailed summary information in many different forms.  Below I provide a point estimate (median) along with an 90% hdi interval (highest density interval) estimate.   The median value indicates that about 1/3 of the farms are infected.
 ```{r}
 
-fit5 %>% gather_draws(HTP) %>% median_hdi(.width=.9) %>% flextable()
+fit5 %>% gather_draws(HTP) %>% median_hdi(.width=.9) %>% datatable %>% formatRound(2:4,digits=3)
 ```
 
 As this mean value checks (somewhat) with the fraction of herds that had positive test results, we imagine that maybe the model is doing something that we expect.
@@ -271,26 +273,16 @@ A critical goal to this grant, as well as to this analysis overall is ... how ac
 Specificity is very high, though ELISA is much worse than the others.
 
 ```{r }
-plot_title <- ggtitle("Specificity (Goats)")
-#ggsave(filename=here("figs","spec_goat.png"), width=10,height=8,units="cm"   )
-mcmc_areas(posterior,regex_pars=c("spec"))+
-     scale_y_discrete(labels=c("spec_elisa","spec_pcr","spec_cult"))+plot_title
-
-
-#ggsave(filename=here("figs","spec_goat.png"), width=7.5,height=5,units="cm"   )
+mcmc_areas_ridges(posterior,regex_pars=c("spec"))+
+     scale_y_discrete(labels=c("spec_elisa","spec_pcr","spec_cult"))
 ```
 
 ### Sensitivity
 
 ```{r}
-plot_title <- ggtitle("Sensitivy (Goats)")
 mcmc_areas(posterior,regex_pars=c("sens"))+
-     scale_y_discrete(labels=c("sens_elisa","sens_pcr","sens_cult"))+plot_title
-
-#ggsave(filename=here("figs","sens_goat.png"), width=7.5,height=5,units="cm"   )
+     scale_y_discrete(labels=c("sens_elisa","sens_pcr","sens_cult"))
 ```
-
-
 ```{r}
 fit5 %>% gather_draws(spec[i],sens[i]) %>% median_hdi(.width=.9) %>% 
      arrange(.variable) %>%  flextable()
@@ -303,19 +295,12 @@ The way I formulated the model allows me to compute a parameter which I call _he
 ```{r fig.height=5, include=FALSE}
 mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:4))))
 ```
-
-
-
-
-
-
-
 ```{r}
 new=set_flextable_defaults(digits=3)
 dfab=fit5 %>% gather_draws(HIP[i]) %>% median_hdi(.width=.9)
 
 
-dfab %>% mutate(across(3:6,~ round(.x,digits=3))) %>% flextable() 
+dfab %>% mutate(across(3:6,~ round(.x,digits=3))) %>% flextable() %>%theme_booktabs()
 ```
 
 It is informative to merge these median values with the farm-level test results to the implications.
@@ -341,7 +326,7 @@ mcmc_areas(posterior,regex_pars=c("CWHP"))
 ```
 
 ```{r eval=FALSE, include=FALSE}
-fit5 %>% gather_draws(CWHP[i]) %>% median_hdi(.width=.9) %>% flextable()
+fit5 %>% gather_draws(CWHP[i]) %>% median_hdi(.width=.9) %>% datatable %>% formatRound(3:5,digits=3)
 ```
 
 
@@ -353,7 +338,7 @@ One way to address this question is to see if our model (with the fitted paramet
 
 ```{r eval=FALSE, include=FALSE}
 df_a=goat %>% count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture)
-df_a %>% flextable()
+df_a
 ```
 
 Let's create a helper function that takes a sampled parameter draw and generates a replicate sample:
@@ -398,7 +383,7 @@ make_rep <- function(this_samp) {
 
 ```{r eval=FALSE, include=FALSE}
 
-make_rep(sample(5000,1)) %>%  count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture) %>% flextable()
+make_rep(sample(5000,1)) %>%  count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture)
 ```
 
 
@@ -425,15 +410,12 @@ p1g=g2 %>% ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
      theme_minimal() +
      theme(strip.background = element_blank(),
            strip.placement = "outside",
-           strip.text.y.left = element_text(size = 8,angle = 0,color="gray72"),
+           strip.text.y.left = element_text(size = 12,angle = 0,color="gray72"),
            axis.title.y=element_text(color="gray72")) +
      xlab("number of goats tested on farm")+ylab("Farm Number")+
      ggtitle("Results of MAP testing of goat herds on 27 farms in grant study area")
 
 p1g
-
-
-#ggsave(filename=here("figs","data_goat.png"), width=12,height=8,units="cm"   )
      
 ```
 
@@ -487,17 +469,12 @@ p2g2=g2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=goat_num,y=fct
      theme_minimal() +
      theme(strip.background = element_blank(),
            strip.placement = "outside",
-           strip.text.y.left = element_text(size = 9,angle = 0,color="gray72"),
+           strip.text.y.left = element_text(size = 12,angle = 0,color="gray72"),
            axis.title.y=element_text(color="gray72")) +
-     xlab("")+ylab("Farm Number")+
+     xlab("number of goats tested on farm")+ylab("Farm Number")+
      ggtitle("Results of MAP testing")
 p2g1+p2g2+ 
   plot_layout(widths = c(1.5, 1))
-
-
-#ggsave(filename=here("figs","HIP_goat.png"), width=8,height=6,units="cm"   )
-ggsave(filename=here("figs","HIP_goat.tiff"), width=8,height=6,units="cm" ,dpi=300  )
-
 ```
 As explanation of above figure: On the left is the HIP distribution for a selection of farms, and on the right is the associated testing data, where we have chosen farms to illustrate some key ideas:
 

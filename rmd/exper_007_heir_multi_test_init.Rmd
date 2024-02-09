@@ -1,14 +1,16 @@
 ---
 title: "Using stan with heirarchical model"
 author: "Joe Skufca"
-date: '2022-01-19'
+date: "2022-01-19"
 output:
-  html_notebook:
+  word_document:
     toc: yes
   html_document:
     toc: yes
     df_print: paged
     code_folding: hide
+  html_notebook:
+    toc: yes
 ---
 
 Experiment 7 provides an initial report on the "goat" dataset, using an approach that equivalent to the approach of Baumen et al in the 2011 Ontario study, with some slight modifications:
@@ -59,7 +61,8 @@ Load data.  We eliminate the one sample that was questionable.
 ```{r message=FALSE, warning=FALSE, results="asis"}
 goat_file=here("data","goat_results.xlsx")
 
-goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
+goat = readxl::read_excel(goat_file, sheet = "sheet1") %>%
+     #goat = readxl::read_excel(goat_file, sheet = "surrogate_data_1") %>%
      clean_names() %>%
      select(sample_number,farm_number,  elisa, pcr, culture) %>%
      filter(elisa  %in% c("p", "n")) %>%

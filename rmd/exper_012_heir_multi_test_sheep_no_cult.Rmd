@@ -1,24 +1,26 @@
 ---
 title: "Using stan with heirarchical model"
-subtitle: "Analysis of Sheep data - using suspected positives"
 author: "Joe Skufca"
-date: '2022-01-19'
+date: "2022-04-10"
 output:
+  word_document:
+    toc: yes
+  html_notebook:
+    toc: yes
   html_document:
     toc: yes
     df_print: paged
     code_folding: hide
-  html_notebook:
-    toc: yes
+subtitle: "Analysis of Sheep data - ignoring culture results"
 ---
 
-Experiment 9 provides analyzes the "sheep" dataset, while treating the "suspected" positive ELISA samples as positive.  The interpretation is that the test is showing a valid indication of disease presense on the farm, interpretatble as evidence.  The Bayesian method will then interpret the overall impact of that evidence.   No other parameters will be changed from the report last generated under experiment 8.   
+Experiment 12 provides analyzes the "sheep" dataset, while ignoring the culture results, as none of those results were positive.  Instead, we rely more heavily on prior information to assist in the analysis.     No other parameters will be changed from the report last generated under experiment 9.   
 
 * We use a two-latent class model, which assumes each animal is classes as either "infected" or "non-infected."
 * We make estimates of within herd prevalence for each herd.
 
 
-Additionally, this preliminary reporting uses "priors" parameterized as done in that 2011 paper, as modified slightly (as we await further updates:)
+
 
  
 
@@ -63,14 +65,18 @@ sheep_file=here("data","sheep_individuals.xlsx")
 
 sheep = readxl::read_excel(sheep_file, sheet = "Sheet1")%>%
      clean_names() %>%
-     select(animal_number,farm_number,  elis_aresult, pc_rresult, map_result) %>%
+     select(animal_number,sex,farm_number,  elis_aresult, pc_rresult, map_result) %>%
      rename(elisa=elis_aresult,pcr=pc_rresult,culture=map_result) %>%
      mutate(across(elisa:culture, ~ (case_when(
           .x == "n" ~ 0,
           TRUE ~ 1,
-     )))) 
+     )))) %>% 
+     mutate(sex=case_when(
+          str_starts(tolower(sex),"f") ~ "f",
+          TRUE ~ "m"
+     ))
      
-gtsummary::tbl_summary(sheep %>% select(-animal_number))
+gtsummary::tbl_summary(sheep %>% select(-animal_number,-sex))
 
 ```
 
@@ -92,17 +98,16 @@ We use the `PriorGen` package to assist with developing hyperparameters.  The wr
 my_findbeta=function(...){
      pattern <- "[0-9.]+"
      a=capture.output(findbeta(...))
-     b=str_match_all(a[1],pattern) %>% unlist() %>% as.numeric()
-     b=b[2:3]
+     b=str_match_all(a[3],pattern) %>% unlist() %>% as.numeric()
      b
 }
 
 my_findbetamupsi=function(...){
      pattern <- "[0-9.]+"
      a=capture.output(findbetamupsi(...))
-     b=str_match_all(a[1],pattern) %>% unlist() %>% as.numeric()
-     b=b[2:3]
-     g=str_match_all(a[2],pattern) %>% unlist() %>% as.numeric()
+     b=str_match_all(a[3],pattern) %>% unlist() %>% as.numeric()
+     #b=b[2:3]
+     g=str_match_all(a[6],pattern) %>% unlist() %>% as.numeric()
      g=g[2:3]
      c(b,g) #output
 }
@@ -202,12 +207,12 @@ data5= list(F=21,
             I=316,
             I_s=sheep_sum$i_s,
             I_e=sheep_sum$i_e,
-            J=3,
-            y=as.matrix(sheep %>% select(3:5)),
-            alpha_sens = c( elisa_sens[1],   pcr_sens[1],    culture_sens[1]),
-            beta_sens =  c( elisa_sens[2],   pcr_sens[2],    culture_sens[2]),
-            alpha_spec = c( elisa_spec[1],   pcr_spec[1],    culture_spec[1]),
-            beta_spec=   c( elisa_spec[2],   pcr_spec[2],    culture_spec[2]),
+            J=2,
+            y=as.matrix(sheep %>% select(elisa,pcr)),
+            alpha_sens = c( elisa_sens[1],   pcr_sens[1]),
+            beta_sens =  c( elisa_sens[2],   pcr_sens[2]),
+            alpha_spec = c( elisa_spec[1],   pcr_spec[1]),
+            beta_spec=   c( elisa_spec[2],   pcr_spec[2]),
             htp_alpha=htp_hyp[1],
             htp_beta=htp_hyp[2],
             mu_alpha=mupsi_hyp[1],
@@ -243,10 +248,12 @@ posterior=as.matrix(fit5)
 Herd True Prevalence (HTP) is the fraction of herd with at least one infected animal.
 
 ```{r}
-plot_title <- ggtitle("Herd Level Prevalence",
+plot_title <- ggtitle("Herd Level Prevalence, Sheep",
                       "with medians and 80% intervals")
 mcmc_areas(posterior,prob=.8,pars="HTP") + plot_title
 
+
+#ggsave(filename=here("figs","HTP_sheep.png"), width=10,height=8,units="cm"   )
 ```
 
 For a particular parameter, we can ask for detailed summary information in many different forms.  Below I provide a point estimate (median) along with an 90% hdi interval (highest density interval) estimate.   The median value indicates that about 1/3 of the farms are infected.
@@ -265,14 +272,14 @@ Specificity is very high, though ELISA is much worse than the others.
 
 ```{r }
 mcmc_areas_ridges(posterior,regex_pars=c("spec"))+
-     scale_y_discrete(labels=c("spec_elisa","spec_pcr","spec_cult"))
+     scale_y_discrete(labels=c("spec_elisa","spec_pcr"))
 ```
 
 Sensitivity, however, is likely less than 0.5, and worst for pcr.
 
 ```{r}
 mcmc_areas(posterior,regex_pars=c("sens"))+
-     scale_y_discrete(labels=c("sens_elisa","sens_pcr","sens_cult"))
+     scale_y_discrete(labels=c("sens_elisa","sens_pcr"))
 ```
 ```{r}
 fit5 %>% gather_draws(spec[i],sens[i]) %>% median_hdi(.width=.9) %>% 
@@ -281,7 +288,7 @@ fit5 %>% gather_draws(spec[i],sens[i]) %>% median_hdi(.width=.9) %>%
 
 ### Herd Infection Probability
 
-The way I formulated the model allows me to compute a parameter which I call _herd infection probability_ (HIP), which give the probability that a particular herd has at least one infected animal in the group of animals tested.  (Note the care of wording.  The model is not aware of the total number of animals on the farm, which would be necessary to actually perform this calculation.)
+The way I formulated the model allows me to compute a parameter which I call _herd infection probability_ (HIP), which gives the probability that a particular herd has at least one infected animal in the group of animals tested.  (Note the care of wording.  The model is not aware of the total number of animals on the farm, which would be necessary to actually perform this calculation.)
 
 ```{r fig.height=10}
 mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:21))))
@@ -405,5 +412,33 @@ p1g
      
 ```
 
+
+### Herd Infection Probability (HIP)
+
+For each "herd" (farm), we may estimate the probability that the farm has an infected animal (within the group of animals being tested).  We call this value *Herd Infection Probability* (HIP) and we estimate its value separately for each farm.  As a Bayesion parameter, it is also shown as a distribution (of values).  The value for HTP reflects an overall regional average, while HIP reflects the conditions on a farm and is a result or the data collected from that farm, as adjusted for the understanding of the accuracy of the tests and the overall conditions expected in the region.
+
+```{r echo=FALSE}
+farm_list=c(19,30,32,14,31,11,3)
+#a=sheep$farm_number %>% unique()
+#farm_id=map(farm_list,~which(a==.)) %>% unlist()
+farm_id=map(farm_list,~which(sheep_sum$farm_number==.)) %>% unlist()
+
+plot_title <- ggtitle("HIP distribution")
+p2g1=mcmc_areas(posterior,pars=vars(param_range("HIP",farm_id)))+plot_title
+p2g2=s2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=sheep_num,y=fct_inorder(test),fill=result)) +
+     facet_wrap(~fct_reorder(as.factor(farm_number),median_HIP,.desc=TRUE),
+                ncol=1,strip.position="left",dir="v")+
+     geom_tile(color="grey", show.legend = FALSE)+
+     scale_fill_manual(values = CPCOLS)+
+     theme_minimal() +
+     theme(strip.background = element_blank(),
+           strip.placement = "outside",
+           strip.text.y.left = element_text(size = 12,angle = 0,color="gray72"),
+           axis.title.y=element_text(color="gray72")) +
+     xlab("number of sheep tested on farm")+ylab("Farm Number")+
+     ggtitle("Results of MAP testing")
+p2g1+p2g2+ 
+  plot_layout(widths = c(1.5, 1))
+```
 
 

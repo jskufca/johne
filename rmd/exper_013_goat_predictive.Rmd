@@ -1,7 +1,7 @@
 ---
 title: "Using stan with heirarchical model"
 author: "Joe Skufca"
-date: '2022-01-19'
+date: '2024-02-09'
 output:
   word_document:
     toc: yes     
@@ -12,15 +12,19 @@ output:
     
 ---
 
-Experiment 10 provides an  report on the "goat" dataset, using an approach that equivalent to the approach of Baumen et al in the 2011 Ontario study, with some slight modifications:
+Experiment 13 provides uses the collected data from the grant funded study and
+uses that data as the basis for a model where we will add a "prospective" farm.
+
+The intention is to be able to make predictions for HIP and CWHP for a farm 
+that likes outside the original protocol tested.   Typically, we image this will be
+"new" data, but likely only from one test.
 
 * We use a two-latent class model, which assumes each animal is classes as either "infected" or "non-infected."
 * We make estimates of within herd prevalence for each herd.
+* For the "new" herd, we will use a (-1) as the indicator of a missing test result.
 
 
-Additionally, this preliminary reporting uses "priors" parameterized as done in that 2011 paper, as modified slightly (as we await further updates:)
-
-* Prior for herd level prevelence was initiall taken as $Beta(1.55,2.66)$, but is modified below.  
+* Prior for herd level prevelence was initially taken as $Beta(1.55,2.66)$, but is modified below.  
 
 **The overall intent of this experiment is to produce a set of plots to support reporting required for the grant.**
 
@@ -55,7 +59,7 @@ library(flextable)
 
 We will analyze the goat data, but using a hierarchical model (with each farm treated as a herd).
 
-### Data
+### Historical (baseline) Data
 
 Load data.  We eliminate the one sample that was questionable.
 
@@ -79,12 +83,37 @@ goat = readxl::read_excel(goat_file, sheet = "surrogate_data_1") %>%
 
 ```
 
+### Additional data from new farm
+
+Similar to the goat set above, we will add hypothetical data, using -1 for missing results.
+
+Hypothetical - test of 20 goats with ELISA, all negative, but no other tests performed.
+
+
+```{r}
+s=20
+s_max=max(goat$sample_number)
+f_max=max(goat$farm_number)
+
+goat_new=tibble(sample_number=1:s + s_max,
+                farm_number=f_max+1,
+                elisa=0,
+                pcr=-1,
+                culture=-1)
+
+goat_s=goat %>% bind_rows(goat_new)
+```
+
+
+
+
+
 ### Assemble Stan model data
 
 I include here a breakdown table by farm, as it is part of assembling the data structure required to input to the stan code. This table will help us to understand why certain farms are deemed to be higher likelyhood of being infected as well as differing levels of within farm prevelance.
 
 ```{r}
-goat_sum=goat %>% rowid_to_column("id") %>% group_by(farm_number) %>%
+goat_sum=goat_s %>% rowid_to_column("id") %>% group_by(farm_number) %>%
      summarise(i_s=first(id),i_e=last(id),n=n(),across(elisa:culture,sum))
 goat_sum %>% flextable() 
 ```
@@ -197,13 +226,13 @@ culture_spec=my_findbeta(themode = culture_v[3],percentile.value = culture_v[4],
 
 
 ```{r}
-# prior from Ontario 2011 paper
-data5= list(F=27,
-            I=316,
+
+data5= list(F=nrow(goat_sum),
+            I=nrow(goat_s),
             I_s=goat_sum$i_s,
             I_e=goat_sum$i_e,
             J=3,
-            y=as.matrix(goat %>% select(elisa:culture)),
+            y=as.matrix(goat_s %>% select(elisa:culture)),
             alpha_sens = c( elisa_sens[1],   pcr_sens[1],    culture_sens[1]),
             beta_sens =  c( elisa_sens[2],   pcr_sens[2],    culture_sens[2]),
             alpha_spec = c( elisa_spec[1],   pcr_spec[1],    culture_spec[1]),
@@ -222,8 +251,6 @@ data5= list(F=27,
             # alpha_spec = c(99.7 , 107.2 , 2291.17),
             # beta_spec=   c( 6.19,   3.17,    6.74),
 
-
-
 ```
 
 
@@ -231,7 +258,7 @@ data5= list(F=27,
 
 This model takes a bit of time to run, depending upon the power of your machine.  On my office machine, with model compiled, I can compute a new simulation (new parameters) usually in about a minute.
 ```{r}
-fit5=stan(file=here("src","heir_multi_test_B.stan"),data=data5,
+fit5=stan(file=here("src","heir_multi_test_B_OOS.stan"),data=data5,
           warmup=500,chains=12,iter=2000)
 ```
 
@@ -409,12 +436,13 @@ make_rep(sample(5000,1)) %>%  count(elisa,pcr,culture) %>% arrange(elisa,pcr,cul
 Let's first create a visual of the entire dataset, illustrating sparcity of positive samples.
 
 ```{r echo=FALSE, fig.cap="Tests taken on male goats is bosed in black."}
-g2=goat %>% group_by(farm_number) %>% mutate(goat_num=row_number()) %>%
+g2=goat_s %>% group_by(farm_number) %>% mutate(goat_num=row_number()) %>%
      select(-sample_number) %>% pivot_longer(elisa:culture, names_to = "test",values_to = "result" ) %>%
-     mutate(result=as.logical(result)) %>% left_join(df_j %>% select(farm_number,median_HIP))
+     mutate(result=as.factor(result)) %>% 
+     left_join(df_j %>% select(farm_number,median_HIP))
 
 
-CPCOLS <- c("#FFEFDB", "#5F9EA0")
+CPCOLS <- c("#FFEFDB", "#5F9EA0","#D1D1D1")
 CPCOLS2 <- c("#D1D1D1", "#000000")
 p1g=g2 %>% ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
      facet_wrap(~fct_reorder(as.factor(farm_number),median_HIP,.desc=TRUE),
@@ -437,7 +465,7 @@ p1g
      
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 g2_cross=g2 %>% tabyl(sex,result) %>% rename(neg="FALSE",pos="TRUE") %>%
      adorn_percentages("row") %>% 
   adorn_pct_formatting(rounding = "half up", digits = 0) %>%
@@ -476,7 +504,7 @@ fit5 %>% gather_draws(HTP) %>% median_hdi(.width=.9) %>% flextable()
 For each "herd" (farm), we may estimate the probability that the farm has an infected animal (within the group of animals being tested).  We call this value *Herd Infection Probability* (HIP) and we estimate its value separately for each farm.  As a Bayesion parameter, it is also shown as a distribution (of values).  The value for HTP reflects an overall regional average, while HIP reflects the conditions on a farm and is a result or the data collected from that farm, as adjusted for the understanding of the accuracy of the tests and the overall conditions expected in the region.
 
 ```{r echo=FALSE}
-farm_list=c(9,2,4,5,10,3,1)
+farm_list=c(9,2,4,5,10,3,1,28)
 plot_title <- ggtitle("HIP distribution")
 p2g1=mcmc_areas(posterior,pars=vars(param_range("HIP",farm_list)))+plot_title
 p2g2=g2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
@@ -496,7 +524,7 @@ p2g1+p2g2+
 
 
 #ggsave(filename=here("figs","HIP_goat.png"), width=8,height=6,units="cm"   )
-ggsave(filename=here("figs","HIP_goat.tiff"), width=8,height=6,units="cm" ,dpi=300  )
+#ggsave(filename=here("figs","HIP_goat.tiff"), width=8,height=6,units="cm" ,dpi=300  )
 
 ```
 As explanation of above figure: On the left is the HIP distribution for a selection of farms, and on the right is the associated testing data, where we have chosen farms to illustrate some key ideas:
@@ -506,10 +534,10 @@ As explanation of above figure: On the left is the HIP distribution for a select
 * For farms 5, 10, and 3, note that as we increase the number of goats testes, the HIP shifts to the left, and the median probability is reduced.
 * Note that overall, even though no positive tests were seen on farm three, the HIP is not 0.  (The medial value on farm 3 is actually 10%).  This risk of undetected MAP persists due to the known low sensitivity of the testing procedures in an operational setting.
 
-### Farm 22 shows extremely high liklihood of infection.
+### Farm 28 shows extremely low liklihood of infection.
 
 ```{r echo=FALSE}
-farm_list=c(22)
+farm_list=c(28)
 plot_title <- ggtitle("HIP distribution")
 p2g1=mcmc_areas(posterior,pars=vars(param_range("HIP",farm_list)))+plot_title
 p2g2=g2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
@@ -545,7 +573,7 @@ p1g+
 Whereas *herd prevelence* (HTP) is concerned with what fraction of herds will have an infected animal, the other prevelence measure of interest is *what fraction of goats are carrying the infection*?  In the typical model, the parameter of interest considers this questions on a *per farm* basis, and attempts to explain ... under the assumption that MAP is present in the herd, what fraction of the herd is infected?   This quantity is designated as the *conditional within herd prevalence* (CWHP) and is estimate, as a distribution, herd by herd for each farm, again, based on the testing outcomes.
 
 ```{r}
-farm_list=c(22,24,15,8,11,1)
+farm_list=c(22,24,15,8,11,1,28)
 plot_title <- ggtitle("CWHP distribution")
 p3g1=mcmc_areas(posterior,pars=vars(param_range("CWHP",farm_list)))+plot_title+ geom_vline(xintercept = .25)
 p3g2=g2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
@@ -576,7 +604,7 @@ df_hc=fit5 %>% gather_draws(CWHP[i]) %>% median_hdci(.width=.9) %>% select(i,.va
 df_jc=goat_sum %>% select(-i_s,-i_e) %>% 
      left_join(df_hc,by=c("farm_number"="i")) %>% rename(median_CWHP=.value)
 
-g3=goat %>% group_by(farm_number) %>% mutate(goat_num=row_number()) %>%
+g3=goat_s %>% group_by(farm_number) %>% mutate(goat_num=row_number()) %>%
      select(-sample_number) %>% pivot_longer(elisa:culture, names_to = "test",values_to = "result" ) %>%
      mutate(result=as.logical(result)) %>% left_join(df_jc %>% select(farm_number,median_CWHP))
 g3 %>%    ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +

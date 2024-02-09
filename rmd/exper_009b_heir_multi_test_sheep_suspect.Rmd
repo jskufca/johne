@@ -62,8 +62,12 @@ I have made some choices about data removal (removing sheep with suspect elisa r
 sheep_file=here("data","sheep_individuals.xlsx")
 
 sheep = readxl::read_excel(sheep_file, sheet = "Sheet1")%>%
-     clean_names() %>%
-     select(animal_number,farm_number,  elis_aresult, pc_rresult, map_result) %>%
+     clean_names() %>% mutate(sex=str_to_lower(sex)) %>%
+     mutate(sex=case_when(
+          str_starts(sex,"f") ~ "f",
+          TRUE ~ "m"
+     )) %>%
+     select(animal_number,sex,farm_number,  elis_aresult, pc_rresult, map_result) %>%
      rename(elisa=elis_aresult,pcr=pc_rresult,culture=map_result) %>%
      mutate(across(elisa:culture, ~ (case_when(
           .x == "n" ~ 0,
@@ -399,10 +403,10 @@ p1g=s2 %>% ggplot(aes(x=sheep_num,y=fct_inorder(test),fill=result)) +
            strip.text.y.left = element_text(size = 12,angle = 0,color="gray72"),
            axis.title.y=element_text(color="gray72")) +
      xlab("number of sheep tested on farm")+ylab("Farm Number")+
-     ggtitle("Results of MAP testing of sheep herds on farms in grant study area")
+     ggtitle("Testing of sheep herds")
 
 p1g
-     
+ ggsave(filename=here("figs","data_sheep.png"), width=12,height=8,units="cm"   )    
 ```
 
 
