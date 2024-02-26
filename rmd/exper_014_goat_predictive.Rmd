@@ -536,7 +536,7 @@ farm_list=c(9,2,4,5,10,3,1,28)
 plot_title <- ggtitle("HIP distribution")
 p2g1=mcmc_areas(posterior,pars=vars(param_range("HIP",farm_list)))+plot_title
 p2g2=g2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
-     facet_wrap(~fct_reorder(as.factor(farm_number),median_HIP,.desc=TRUE),
+     facet_wrap(~fct_relevel(as.factor(farm_number),as.character(farm_list)),
                 ncol=1,strip.position="left",dir="v")+
      geom_tile(color="grey", show.legend = FALSE)+
      scale_fill_manual(values = CPCOLS)+
@@ -605,7 +605,7 @@ farm_list=c(22,24,15,8,11,1,28)
 plot_title <- ggtitle("CWHP distribution")
 p3g1=mcmc_areas(posterior,pars=vars(param_range("CWHP",farm_list)))+plot_title+ geom_vline(xintercept = .25)
 p3g2=g2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=goat_num,y=fct_inorder(test),fill=result)) +
-     facet_wrap(~fct_reorder(as.factor(farm_number),median_HIP,.desc=TRUE),
+     facet_wrap(~fct_relevel(as.factor(farm_number),as.character(farm_list)),
                 ncol=1,strip.position="left",dir="v")+
      geom_tile(color="grey", show.legend = FALSE)+
      scale_fill_manual(values = CPCOLS)+
