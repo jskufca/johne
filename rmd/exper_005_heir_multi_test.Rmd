@@ -1,0 +1,170 @@
+---
+title: "Using stan with heirarchical model"
+author: "Joe Skufca"
+date:  "2021-12-23"
+output: 
+    html_notebook:
+       toc: true
+---
+
+This experiment intends to analyze data from each farm as a herd, with common specificity and sensititive.  We assume on a single test (for which I will use the culture data)    The dataset of focus here is the "goat" dataset.
+
+### Setup
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( fig.width = 6,highlight=T)
+
+library(tidyverse)
+library(janitor)
+library(PriorGen)
+
+
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+library(tidybayes)
+```
+
+## Example 1
+
+We will analyze the goat data, but without a heirarchical model (so no need to include which farm).
+
+### Data
+
+Load data.  We eliminate the one sample that was questionable.
+
+
+```{r}
+goat_file=here("data","goat_results.xlsx")
+
+goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
+     clean_names() %>%
+     select(sample_number,farm_number,  elisa, pcr, culture) %>%
+     filter(elisa  %in% c("p", "n")) %>%
+     filter(culture %in% c("p", "n")) %>%
+     mutate(across(elisa:culture, ~ (.x == "p") + 0)) 
+
+
+```
+
+### Assemble Stan model data
+
+In addition to the data, we need information for prior assumptions regarding sensitivity and specificity.
+
+```{r}
+goat_sum=goat %>% rowid_to_column("id") %>% group_by(farm_number) %>%
+     summarise(i_s=first(id),i_e=last(id))
+```
+
+
+
+
+```{r}
+# prior from Ontario 2011 paper
+data5= list(F=27,
+            I=316,
+            I_s=goat_sum$i_s,
+            I_e=goat_sum$i_e,
+            J=3,
+            y=as.matrix(goat %>% select(3:5)),
+            alpha_sens = c( 4.33,   2.41,    4.98),
+            beta_sens =  c( 8.77,   4.29,    6.96),
+            alpha_spec = c(99.7 , 107.2 , 2291.17),
+            beta_spec=   c( 6.19,   3.17,    6.74),
+            htp_alpha=1.55,
+            htp_beta=2.66,
+            b1_mu=-2,
+            b1_sd=2,
+            eta_mu=0,
+            eta_sd=10
+                    )
+
+  # int<lower=1> F; //number of farms
+  # int<lower=1> I; //total number of animals tested
+  # int<lower=1> I_s[F]; //starting index for animals from from f
+  # int<lower=1> I_e[F]; //ending index for animals from from f
+  # 
+  # int<lower=1> J; // number of tests - 3 for our work
+  # int<lower=1,upper=2> y[I,J]; // test resuls  0 for neg, 1 for pos
+  # // params for prior for sensitivities and specificities
+  # row_vector<lower=0>[J] alpha_sens;
+  # row_vector<lower=0>[J] beta_sens;
+  # row_vector<lower=0>[J] alpha_spec;
+  # row_vector<lower=0>[J] beta_spec;
+```
+
+
+### fitting the model
+
+```{r}
+fit5=stan(file=here("src","heir_multi_test.stan"),data=data5,
+          warmup=500,chains=12,iter=2000)
+```
+
+###  Visualizing results
+
+```{r}
+posterior=as.matrix(fit5)
+```
+
+
+Prevalence
+
+```{r}
+plot_title <- ggtitle("Posterior distributions",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior,prob=.8,pars="HTP")
+
+
+```
+
+```{r}
+summary(fit5)
+mcmc_areas(posterior,prob=.8,pars="beta1")
+```
+
+### Which farms?
+
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("EWHP\\[2[0-7]")) 
+```
+### Farm Level prevelence
+
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("HID\\[1[0-5]"))
+```
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("sens"))
+mcmc_areas_ridges(posterior,regex_pars=c("spec"))
+```
+
+
+### Chain mixing
+
+```{r}
+plot(fit5, plotfun = "trace", pars = c("beta1"), inc_warmup = TRUE)
+
+```
+
+
+```{r}
+
+mcmc_intervals(posterior,regex_pars=c("eta"))
+
+```
+
+
+
+########################
+
+
+
+
+
+
+
+

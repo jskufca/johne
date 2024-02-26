@@ -1,0 +1,444 @@
+---
+title: "Using stan with heirarchical model"
+author: "Joe Skufca"
+date: "2022-04-10"
+output:
+  word_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
+    code_folding: hide
+subtitle: "Analysis of Sheep data - ignoring culture results"
+---
+
+Experiment 12 provides analyzes the "sheep" dataset, while ignoring the culture results, as none of those results were positive.  Instead, we rely more heavily on prior information to assist in the analysis.     No other parameters will be changed from the report last generated under experiment 9.   
+
+* We use a two-latent class model, which assumes each animal is classes as either "infected" or "non-infected."
+* We make estimates of within herd prevalence for each herd.
+
+
+
+
+ 
+
+
+## Setup
+
+We load anticipated packages and set rstan options.
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( highlight=T,message=FALSE, warning=FALSE)
+
+library(tidyverse)
+library(patchwork)
+library(janitor)
+library(PriorGen)
+
+
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+library(tidybayes)
+library(shinystan)
+library(DT)
+```
+
+## Preparing the sheep data
+
+We will analyze the sheep data, but using a hierarchical model (with each farm treated as a herd).
+
+### Load and clean raw data 
+
+Load data.  
+
+I have made some choices about data removal (removing sheep with suspect elisa results, but we should discuss alternatives )
+
+```{r message=FALSE, warning=FALSE, results="asis"}
+sheep_file=here("data","sheep_individuals.xlsx")
+
+sheep = readxl::read_excel(sheep_file, sheet = "Sheet1")%>%
+     clean_names() %>%
+     select(animal_number,sex,farm_number,  elis_aresult, pc_rresult, map_result) %>%
+     rename(elisa=elis_aresult,pcr=pc_rresult,culture=map_result) %>%
+     mutate(across(elisa:culture, ~ (case_when(
+          .x == "n" ~ 0,
+          TRUE ~ 1,
+     )))) %>% 
+     mutate(sex=case_when(
+          str_starts(tolower(sex),"f") ~ "f",
+          TRUE ~ "m"
+     ))
+     
+gtsummary::tbl_summary(sheep %>% select(-animal_number,-sex))
+
+```
+
+### Assemble Stan model data
+
+I include here a breakdown table by farm, as it is part of assembling the data structure required to input to the stan code. This table will help us to understand why certain farms are deemed to be higher likelihood of being infected as well as differing levels of within farm prevalence.
+
+```{r}
+sheep_sum=sheep %>% rowid_to_column("id") %>% group_by(farm_number) %>%
+     summarise(i_s=first(id),i_e=last(id),n=n(),across(elisa:culture,sum))
+sheep_sum 
+```
+
+### Prior Information
+
+We use the `PriorGen` package to assist with developing hyperparameters.  The wrapper functions created here allow the text output from that packaage to be used programmatically.
+
+```{r }
+my_findbeta=function(...){
+     pattern <- "[0-9.]+"
+     a=capture.output(findbeta(...))
+     b=str_match_all(a[3],pattern) %>% unlist() %>% as.numeric()
+     b
+}
+
+my_findbetamupsi=function(...){
+     pattern <- "[0-9.]+"
+     a=capture.output(findbetamupsi(...))
+     b=str_match_all(a[3],pattern) %>% unlist() %>% as.numeric()
+     #b=b[2:3]
+     g=str_match_all(a[6],pattern) %>% unlist() %>% as.numeric()
+     g=g[2:3]
+     c(b,g) #output
+}
+
+```
+
+#### Priors for hyperparameters
+
+For several of the hyperparameters, we will use Beta or Gamma distributions as priors, along with expert knowledge to develop informative priors.  We provide several examples, as templates, (with blank informationation), then continue with simply showing the completed information.
+
+For the hyperparamters we will need below, I work from data provided in Jessica's email dtd 20 Jan 2022 at 1611, where some modifications are required, in which case I will refer to Bauman.
+
+
+For Elisa sensitivity - use Bauman's 2011 prior - but should (perhaps) update based on their results.
+```{r}
+elisa_sens=c(9.26,22.23)
+```
+
+For PCR Sens - use mode of 85, with 95% prob of above 20%
+
+```{r}
+pcr_sens=my_findbeta(themode = .85,percentile.value = .2,lower.v = FALSE)
+```
+
+For Culture Sens - mode of 6%, 95% probability that it is less that 13%
+
+```{r}
+culture_sens=my_findbeta(themode = .06,percentile.value = .13,lower.v = TRUE)
+```
+For specificity:
+
+ELISA: mode .99  but  95% sure that it's > .9
+```{r}
+elisa_spec=my_findbeta(themode = .99,percentile.value = .9,lower.v = FALSE)
+
+```
+
+PCR: mode .978  but  95% sure that it's > .5   (some guessing here).
+```{r}
+pcr_spec=my_findbeta(themode = .978,percentile.value = .5,lower.v = FALSE)
+
+```
+
+Culture: mode .995  but  95% sure that it's > .9   (some guessing here).
+```{r}
+culture_spec=my_findbeta(themode = .995,percentile.value = .9,lower.v = FALSE)
+
+```
+
+
+#### Help required with this prior
+
+I filled in the numbers, but we would need expert opinion to pick quantities based on "prior" belief and literature review:
+
+
+```{r}
+htp1=.3
+htp2=.67
+htp_hyp=my_findbeta(themode = htp1,percentile.value = htp2,lower.v = TRUE)
+ggfortify::ggdistribution(dbeta,seq(0,1,.005),shape1=htp_hyp[1],shape2=htp_hyp[2])+theme_minimal()
+```
+For HTP hyperparameters: Based on expert opinion, we suspect that the most likely value for the fraction of farms with Johnes present in the goat flock is about `r formattable::percent(htp1)`, and we are **95%** certain that the fraction of infected farms is less that `r formattable::percent(htp2)`.
+
+### Within Herd Prevalence (WHP)
+
+Within herd prevalence prior information is captured by both a mean value and a description of the variance, with hyperparameters $\mu$ and $\psi$ drawn from a Beta and Gamma distribution respectivelvy. 
+To generate the hyperparameters for $\mu$ and $\psi$ so that we can prescribe priors for within herd prevalence, we complete the  portions of this sentence with expert opinion based on area knoweledge:
+
+```{r}
+v1=.2 
+v2=.95
+v3= .33
+v4=.9
+v5=.5
+v6=.7
+
+mupsi_hyp=my_findbetamupsi(themean=v1, percentile=v2, percentile.value=v3,
+ lower.v=TRUE,
+psi.percentile=v4, percentile.median=v5, percentile95value=v6)
+
+```
+
+> Consider herds in this region of study, and consider those farms for which it is known that
+> Johnes is present in that herd.  The fraction of animals on that farm that will be infected
+> would be: the **average** value is thought to be `r formattable::percent(v1)`  and we are 
+> `r formattable::percent(v2)` confident that **average value** it is not more than `r formattable::percent(v3)`.
+> Rather than the *average value*, we may estimate an upper bound, such that 
+> `r formattable::percent(v4)` of the infected farm would probably have an infection rate below
+> `r formattable::percent(v5)`, and we are 99% certain that they would not exceed `r formattable::percent(v6)`.
+
+
+
+
+  
+```{r}
+data5= list(F=21,
+            I=316,
+            I_s=sheep_sum$i_s,
+            I_e=sheep_sum$i_e,
+            J=2,
+            y=as.matrix(sheep %>% select(elisa,pcr)),
+            alpha_sens = c( elisa_sens[1],   pcr_sens[1]),
+            beta_sens =  c( elisa_sens[2],   pcr_sens[2]),
+            alpha_spec = c( elisa_spec[1],   pcr_spec[1]),
+            beta_spec=   c( elisa_spec[2],   pcr_spec[2]),
+            htp_alpha=htp_hyp[1],
+            htp_beta=htp_hyp[2],
+            mu_alpha=mupsi_hyp[1],
+            mu_beta=mupsi_hyp[2],
+            psi_a=mupsi_hyp[3],
+            psi_b=mupsi_hyp[4]
+                    )
+
+```
+
+
+### fitting the model
+
+This model takes a bit of time to run, depending upon the power of your machine.  On my office machine, with model compiled, I can compute a new simulation (new parameters) usually in about a minute.
+```{r}
+fit5=stan(file=here("src","heir_multi_test_B.stan"),data=data5,
+          warmup=500,chains=12,iter=2000)
+```
+
+###  Visualizing results
+
+Primarily, here, I will be showing results with graphs, using a bit of words to describe.  
+
+The plots will all be posterior distribution of various parameter values.
+
+```{r}
+posterior=as.matrix(fit5)
+```
+
+
+### Herd True Prevalence
+
+Herd True Prevalence (HTP) is the fraction of herd with at least one infected animal.
+
+```{r}
+plot_title <- ggtitle("Herd Level Prevalence, Sheep",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior,prob=.8,pars="HTP") + plot_title
+
+
+#ggsave(filename=here("figs","HTP_sheep.png"), width=10,height=8,units="cm"   )
+```
+
+For a particular parameter, we can ask for detailed summary information in many different forms.  Below I provide a point estimate (median) along with an 90% hdi interval (highest density interval) estimate.   The median value indicates that about 1/3 of the farms are infected.
+```{r}
+
+fit5 %>% gather_draws(HTP) %>% median_hdi(.width=.9) %>% datatable %>% formatRound(2:4,digits=3)
+```
+
+As this mean value checks (somewhat) with the fraction of herds that had positive test results, we imagine that maybe the model is doing something that we expect.
+
+### Sensitivity and Specificity
+
+A critical goal to this grant, as well as to this analysis overall is ... how accurate are these tests.  Sensitivity and Specificity estimates are an *output* of the model, though we have discussed that they are affected by the assumed prior distributions.  For the analysis shown, the posterior distributions for these measures:
+
+Specificity is very high, though ELISA is much worse than the others.
+
+```{r }
+mcmc_areas_ridges(posterior,regex_pars=c("spec"))+
+     scale_y_discrete(labels=c("spec_elisa","spec_pcr"))
+```
+
+Sensitivity, however, is likely less than 0.5, and worst for pcr.
+
+```{r}
+mcmc_areas(posterior,regex_pars=c("sens"))+
+     scale_y_discrete(labels=c("sens_elisa","sens_pcr"))
+```
+```{r}
+fit5 %>% gather_draws(spec[i],sens[i]) %>% median_hdi(.width=.9) %>% 
+     arrange(.variable) %>% datatable %>% formatRound(3:5,digits=3)
+```
+
+### Herd Infection Probability
+
+The way I formulated the model allows me to compute a parameter which I call _herd infection probability_ (HIP), which gives the probability that a particular herd has at least one infected animal in the group of animals tested.  (Note the care of wording.  The model is not aware of the total number of animals on the farm, which would be necessary to actually perform this calculation.)
+
+```{r fig.height=10}
+mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:21))))
+```
+```{r}
+fit5 %>% gather_draws(HIP[i]) %>% median_hdci(.width=.9) %>% datatable() %>% formatRound(3:5,digits=3)
+```
+
+It is informative to merge these median values with the farm-level test results to the implications.
+
+```{r}
+df_h=fit5 %>% gather_draws(HIP[i]) %>% median_hdci(.width=.9) %>% select(i,.value)
+df_j=sheep_sum %>% select(-i_s,-i_e) %>% rowid_to_column() %>%
+     left_join(df_h,by=c("rowid"="i")) %>% rename(median_HIP=.value)
+
+df_j %>% datatable %>% formatRound(7,digits=3)
+```
+
+### Farm Level Prevalance
+
+We are also interested in understanding, _under the condition that a herd is infected, what is the prevalence of infection within that herd_ (CWHP).  Stated another way, what fraction of a herd is infected (when that number is not 0).
+
+Recognizing that we have pretty sparse data for any particular herd (small sample size for the herd, small number of positives), the wide variability in the parameter estimate is not surprising.   However, we do see strong consistency if we focus on (median levels) especially if we look at herds that are likely infected.
+
+If CWHP is relatively low, it means the disease is does not spread completely throught the herd.  *This phenomena needs to be better understood.*
+
+```{r}
+mcmc_areas(posterior,regex_pars=c("CWHP")) 
+```
+
+```{r}
+fit5 %>% gather_draws(CWHP[i]) %>% median_hdci(.width=.9) %>% datatable %>% formatRound(3:5,digits=3)
+```
+
+
+
+## Is our model any good?
+
+One way to address this question is to see if our model (with the fitted parameters) produces data "like" our original.  I will discuss this in more detail at our meeting.
+
+
+```{r}
+df_a=sheep %>% count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture)
+df_a
+```
+
+Let's create a helper function that takes a sampled parameter draw and generates a replicate sample:
+
+```{r}
+this_samp=2222
+make_rep <- function(this_samp) {
+  A=posterior[this_samp,]
+  
+  pi0=rbernoulli(21,A["HTP"])
+  
+  cwhp=A[1:21]
+  spec=A[c("spec[1]","spec[2]","spec[3]")]
+  sens=A[c("sens[1]","sens[2]","sens[3]")]
+  
+  #pi1=(pi0) %*% t(1-spec) 
+  
+  
+  
+  y_rep=matrix(,nrow=316,ncol=3)
+    for (n in 1:21) {
+  
+      for (k in data5$I_s[n]:data5$I_e[n]) {
+           # is this sheep infected determines value for pi1
+           if (!pi0[n]) {  # herd not infected
+                pi1=1-spec
+           } else if (rbernoulli(1,cwhp[n])) { #sheep infected
+                pi1=sens
+           } else {
+               pi1=1-spec 
+           }
+           
+           
+           
+           y_rep[k,1:3]=rbernoulli(3,pi1)
+           }
+      }
+  
+  y_rep=as.tibble(y_rep+0) %>% rename(elisa=V1,pcr=V2,culture=V3)
+}
+```
+
+```{r}
+
+make_rep(sample(5000,1)) %>%  count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture)
+```
+
+# Grant deliverables
+
+### Visualizing the data
+
+Let's first create a visual of the entire dataset, illustrating sparcity of positive samples.
+
+```{r echo=FALSE, fig.cap="Tests taken on male sheep is bolded in black."}
+s2=sheep %>% group_by(farm_number) %>% mutate(sheep_num=row_number()) %>%
+     select(-animal_number) %>% pivot_longer(elisa:culture, names_to = "test",values_to = "result" ) %>%
+     mutate(result=as.logical(result)) %>% left_join(df_j %>% select(farm_number,median_HIP))
+
+
+CPCOLS <- c("#FFEFDB", "#5F9EA0")
+CPCOLS2 <- c("#D1D1D1", "#000000")
+p1g=s2 %>% ggplot(aes(x=sheep_num,y=fct_inorder(test),fill=result)) +
+     facet_wrap(~fct_reorder(as.factor(farm_number),median_HIP,.desc=TRUE),
+                ncol=4,strip.position="left",dir="v")+
+     geom_tile(aes(color=sex), show.legend = FALSE,width=.9)+
+     scale_fill_manual(values = CPCOLS)+
+     scale_color_manual(values=CPCOLS2)+
+     theme_minimal() +
+     theme(strip.background = element_blank(),
+           strip.placement = "outside",
+           strip.text.y.left = element_text(size = 12,angle = 0,color="gray72"),
+           axis.title.y=element_text(color="gray72")) +
+     xlab("number of sheep tested on farm")+ylab("Farm Number")+
+     ggtitle("Results of MAP testing of sheep herds on farms in grant study area")
+
+p1g
+     
+```
+
+
+### Herd Infection Probability (HIP)
+
+For each "herd" (farm), we may estimate the probability that the farm has an infected animal (within the group of animals being tested).  We call this value *Herd Infection Probability* (HIP) and we estimate its value separately for each farm.  As a Bayesion parameter, it is also shown as a distribution (of values).  The value for HTP reflects an overall regional average, while HIP reflects the conditions on a farm and is a result or the data collected from that farm, as adjusted for the understanding of the accuracy of the tests and the overall conditions expected in the region.
+
+```{r echo=FALSE}
+farm_list=c(19,30,32,14,31,11,3)
+#a=sheep$farm_number %>% unique()
+#farm_id=map(farm_list,~which(a==.)) %>% unlist()
+farm_id=map(farm_list,~which(sheep_sum$farm_number==.)) %>% unlist()
+
+plot_title <- ggtitle("HIP distribution")
+p2g1=mcmc_areas(posterior,pars=vars(param_range("HIP",farm_id)))+plot_title
+p2g2=s2 %>%  filter(farm_number %in% farm_list) %>%  ggplot(aes(x=sheep_num,y=fct_inorder(test),fill=result)) +
+     facet_wrap(~fct_reorder(as.factor(farm_number),median_HIP,.desc=TRUE),
+                ncol=1,strip.position="left",dir="v")+
+     geom_tile(color="grey", show.legend = FALSE)+
+     scale_fill_manual(values = CPCOLS)+
+     theme_minimal() +
+     theme(strip.background = element_blank(),
+           strip.placement = "outside",
+           strip.text.y.left = element_text(size = 12,angle = 0,color="gray72"),
+           axis.title.y=element_text(color="gray72")) +
+     xlab("number of sheep tested on farm")+ylab("Farm Number")+
+     ggtitle("Results of MAP testing")
+p2g1+p2g2+ 
+  plot_layout(widths = c(1.5, 1))
+```
+
+

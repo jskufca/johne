@@ -1,0 +1,95 @@
+---
+title: "Simple prevelance/sensitivity/specificity experiment"
+author: "Joe Skufca"
+date:  "2021-12-17"
+output: 
+    html_notebook:
+       toc: true
+---
+
+This experiment intends to use a simple stan model that will give prevelance, specificiy, and sensitivity bayesian parameter analysis on a model of a single site collection.  Prior (for sens and spec) will come from a beta distribution.
+
+### Setup
+
+```{r setup}
+
+options(digits = 3)
+knitr::opts_chunk$set( fig.width = 6,highlight=T)
+
+library(tidyverse)
+library(janitor)
+
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+```
+
+## Example 1
+
+All will use the same compiled model but we will perhaps look at a few different data sets.
+
+### Data
+
+Coefficients for priors are "thin-air" but use `PriorGen` package to have interpretable parameters.
+
+To cite package ‘PriorGen’ in publications use:
+
+  Polychronis Kostoulas (2018). PriorGen: Generates Prior Distributions
+  for Proportions. R package version 1.1.2.
+  https://CRAN.R-project.org/package=PriorGen
+
+```{r}
+PriorGen::findbeta(themode = .8, percentile.value = .75)
+```
+
+
+```{r}
+PriorGen::findbeta(themode = .9, percentile.value = .8)
+```
+
+
+  int y_sample; // number of positives
+  int n_sample; // number of samples
+  // params for prior
+  real<lower=0> alpha_sens;
+  real<lower=0> beta_sens;
+  real<lower=0> alpha_spec;
+  real<lower=0> beta_spec;
+
+
+```{r}
+data1= list(y_sample = 20,
+            n_sample=297,
+            alpha_sens = 167,
+            beta_sens = 43,
+            alpha_spec = 43,
+            beta_spec= 5.62
+                    )
+```
+
+### Fit the model
+
+```{r}
+fit1=stan(file=here("src","simple_spec_sens_prev.stan"),data=data1)
+```
+
+### visualize results
+
+```{r}
+posterior <- as.array(fit1)
+mcmc_dens(
+  posterior
+)
+```
+
+## Conclusion
+
+Without "ground truth" or "gold-standard" with regard to the true state of infection, the analysis cannot provide concensus.  The bi-modal solution for prevelance is a key to understanding.
+
+Either:
+
+* low prevalence and reasonable accurate tests, or
+* high prevalence, and tests with poor performance (especially with regards to sensitivity.)

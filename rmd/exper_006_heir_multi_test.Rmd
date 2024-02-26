@@ -1,0 +1,236 @@
+---
+title: "Using stan with heirarchical model"
+author: "Joe Skufca"
+date: '2021-12-23'
+output:
+  html_notebook:
+    toc: yes
+  html_document:
+    toc: yes
+    df_print: paged
+---
+
+Experiment 6 uses re-parameterization of between herd prevalence using a more standard approach (with beta distribution) from Liapi et al (2011). This experiment intends to analyze data from each farm as a herd, with common specificity and sensititive.  We assume on a single test (for which I will use the culture data)    The dataset of focus here is the "goat" dataset.
+
+### Setup
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( fig.width = 6,highlight=T)
+
+library(tidyverse)
+library(janitor)
+library(PriorGen)
+
+
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(logical = FALSE))
+
+library(bayesplot)
+library(here)
+library(tidybayes)
+library(shinystan)
+```
+
+## Example 1
+
+We will analyze the goat data, but without a heirarchical model (so no need to include which farm).
+
+### Data
+
+Load data.  We eliminate the one sample that was questionable.
+
+
+```{r}
+goat_file=here("data","goat_results.xlsx")
+
+goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
+     clean_names() %>%
+     select(sample_number,farm_number,  elisa, pcr, culture) %>%
+     filter(elisa  %in% c("p", "n")) %>%
+     filter(culture %in% c("p", "n")) %>%
+     mutate(across(elisa:culture, ~ (.x == "p") + 0)) 
+
+
+```
+
+### Assemble Stan model data
+
+In addition to the data, we need information for prior assumptions regarding sensitivity and specificity.
+
+```{r}
+goat_sum=goat %>% rowid_to_column("id") %>% group_by(farm_number) %>%
+     summarise(i_s=first(id),i_e=last(id),n=n(),across(elisa:culture,sum))
+goat_sum
+```
+
+
+
+
+```{r}
+# prior from Ontario 2011 paper
+data5= list(F=27,
+            I=316,
+            I_s=goat_sum$i_s,
+            I_e=goat_sum$i_e,
+            J=3,
+            y=as.matrix(goat %>% select(3:5)),
+            alpha_sens = c( 4.33,   2.41,    4.98),
+            beta_sens =  c( 8.77,   4.29,    6.96),
+            alpha_spec = c(99.7 , 107.2 , 2291.17),
+            beta_spec=   c( 6.19,   3.17,    6.74),
+            htp_alpha=1.55,
+            htp_beta=2.66,
+            mu_alpha=2.15,
+            mu_beta=7.52,
+            psi_a=5.4,
+            psi_b=.55
+                    )
+
+  # int<lower=1> F; //number of farms
+  # int<lower=1> I; //total number of animals tested
+  # int<lower=1> I_s[F]; //starting index for animals from from f
+  # int<lower=1> I_e[F]; //ending index for animals from from f
+  # 
+  # int<lower=1> J; // number of tests - 3 for our work
+  # int<lower=0,upper=1> y[I,J]; // test resuls  0 for neg, 1 for pos
+  # // params for prior for sensitivities and specificities
+  # row_vector<lower=0>[J] alpha_sens;
+  # row_vector<lower=0>[J] beta_sens;
+  # row_vector<lower=0>[J] alpha_spec;
+  # row_vector<lower=0>[J] beta_spec;
+  # real htp_alpha; // prior  (HTP is tau from Liapi)
+  # real htp_beta; // prior
+  # real mu_alpha;// prior
+  # real mu_beta;// prior
+  # real psi_a;// prior
+  # real psi_b;// prior
+```
+
+
+### fitting the model
+
+```{r}
+fit5=stan(file=here("src","heir_multi_test_B.stan"),data=data5,
+          warmup=500,chains=12,iter=2000)
+```
+
+###  Visualizing results
+
+```{r}
+posterior=as.matrix(fit5)
+```
+
+
+Prevalence
+
+```{r}
+plot_title <- ggtitle("Posterior distributions",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior,prob=.8,pars="HTP")
+
+
+```
+
+```{r}
+#summary(fit5)
+#mcmc_areas(posterior,prob=.8,pars="beta1")
+```
+
+### Which farms?
+
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("CWHP")) 
+```
+### Farm Level prevelence
+
+```{r fig.height=10}
+mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:13))))
+
+
+```
+
+```{r}
+mcmc_areas_ridges(posterior,regex_pars=c("sens"))+
+     scale_y_discrete(labels=c("sens_elisa","sens_pcr","sens_cult"))
+
+mcmc_areas_ridges(posterior,regex_pars=c("spec"))+
+     scale_y_discrete(labels=c("spec_elisa","spec_pcr","spec_cult"))
+```
+
+
+### Chain mixing
+
+```{r}
+plot(fit5, plotfun = "trace", pars = c("HTP"), inc_warmup = TRUE)
+
+```
+
+
+
+
+
+## Understanding our data
+
+Let's look at a table of our data.  We will want to see if our model can generate data "like" ours, so ... we need to be able to characterize.
+
+We will use gtsummary package to assist.
+```{r}
+library(gtsummary)
+```
+
+```{r}
+df_a=goat %>% count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture)
+df_a
+```
+
+Let's create a helper function that takes a sampled parameter draw and generates a replicate sample:
+
+```{r}
+this_samp=2222
+make_rep <- function(this_samp) {
+  A=posterior[this_samp,]
+  
+  pi0=rbernoulli(27,A["HTP"])
+  
+  cwhp=A[1:27]
+  spec=A[c("spec[1]","spec[2]","spec[3]")]
+  sens=A[c("sens[1]","sens[2]","sens[3]")]
+  
+  #pi1=(pi0) %*% t(1-spec) 
+  
+  
+  
+  y_rep=matrix(,nrow=316,ncol=3)
+    for (n in 1:27) {
+  
+      for (k in data5$I_s[n]:data5$I_e[n]) {
+           # is this sheep infected determines value for pi1
+           if (!pi0[n]) {  # herd not infected
+                pi1=1-spec
+           } else if (rbernoulli(1,cwhp[n])) { #sheep infected
+                pi1=sens
+           } else {
+               pi1=1-spec 
+           }
+           
+           
+           
+           y_rep[k,1:3]=rbernoulli(3,pi1)
+           }
+      }
+  
+  y_rep=as.tibble(y_rep+0) %>% rename(elisa=V1,pcr=V2,culture=V3)
+}
+```
+
+```{r}
+
+make_rep(sample(5000,1)) %>%  count(elisa,pcr,culture) %>% arrange(elisa,pcr,culture)
+```
+
+
+
+
+

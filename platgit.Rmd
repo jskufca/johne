@@ -1,0 +1,46 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(gert)
+```
+
+
+
+```{r}
+oldwd=getwd()
+gitdir=here::here("data","gitdir")
+repo <- git_clone("https://github.com/jskufca/testgert.git",path=gitdir)
+setwd(gitdir)
+
+# Show some info
+git_log(max = 10)
+
+# Create a branch
+git_branch_create("mybranch", checkout = TRUE)
+
+# Commit things
+
+writeLines("Lorem ipsum dolor sit amet", here::here(gitdir,'test.txt'))
+git_add('test.txt')
+git_commit("add a file", author = "joe <jskufca@clarkson.edu>")
+git_log(max = 10)
+
+# Merge it in master
+git_branch_checkout("main")
+git_merge("mybranch")
+git_branch_delete("main")
+
+# Remove the commit
+git_push()
+setwd(oldwd)
+fs::dir_delete(gitdir)
+```
+
+
