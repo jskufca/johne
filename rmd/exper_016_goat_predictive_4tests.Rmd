@@ -10,20 +10,23 @@ output:
 
 Experiment 16 examines the collaborative dataset working with the Wisconsin lab.
 
-We will analyze using 4 tests (Culture, PCR, and 2 Elisa tests).
+We analyze using 4 tests (Culture, PCR, and 2 Elisa tests).
 
-We start with the collected data from the grant funded study and
-uses that data as the basis for a model where we will add a "prospective" farm.
+Starting from the collected data from the grant funded study, we have removed animals for 
+which a complete set of tests results was not available.
 
-The intention is to be able to make predictions for HIP and CWHP for a farm 
-that lyes outside the original protocol tested.   Typically, we image this will be
-"new" data, but likely only from one test.
+>The data is from file 
+>"MAP NY Goat Project 2021-jc-2025 - WI results - complete for analysis.xlsx"
+> dtd 2025-06-08  
+> as copied to file "goat_results2_wi.xlsx"
+
+
+## Analytic approach
 
 * We use a two-latent class model, which assumes each animal is classes as either "infected" or "non-infected."
 * We make estimates of within herd prevalence for each herd.
-* For the "new" herd, we will append whatever test results are available.
-* The data set has been cleaned to remove some incomplete data sets.
 * Prior for herd level prevalence was is described below and is based on lit review.  
+* Prior for test sensitivity and specificity are support by literature review and are described below.
 
 
 
@@ -63,23 +66,6 @@ Load data.
 
 
 ```{r message=FALSE, warning=FALSE, results="asis"}
-goat_file_old=here("data","goat_results.xlsx")
-
-
-#goat = readxl::read_excel(goat_file, sheet = "Sheet1") %>%
-goat_old = readxl::read_excel(goat_file_old,sheet="surrogate_data_1") %>%
-     clean_names() %>% mutate(sex=str_to_lower(sex)) %>%
-     mutate(sex=case_when(
-          str_starts(sex,"f") ~ "f",
-          TRUE ~ "m"
-     )) %>%
-     select(sample_number,sex,farm_number,  elisa, pcr, culture) %>%
-     filter(elisa  %in% c("p", "n")) %>%
-     filter(culture %in% c("p", "n")) %>%
-     mutate(across(elisa:culture, ~ (.x == "p") + 0)) %>%
-     mutate(valid_elisa=1,valid_pcr=1,valid_culture=1)
-
-
 goat_file=here("data","goat_results2_wi.xlsx")
 
 goat= readxl::read_excel(goat_file) %>%
@@ -119,32 +105,32 @@ Hypothetical - test of 20 goats with ELISA, but no other tests performed.
 
 
 ```{r}
-this_elisa=c(rep(0,20))  #  20 total, all negative
-#this_elisa=c(rep(0,19),1)  #  20 total, 1 positive
-#this_elisa=c(0, 0, 0, 0, 0, 0)  #  6, all negative
-#this_elisa=c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  #  11, all negative
-#this_elisa=rep(0,30)  #  30, all negative
-s=length(this_elisa)
-
-
-
-
-s_max=max(goat$sample_number)
-f_max=max(goat$farm_number)
-
-goat_new=tibble(sample_number=1:s + s_max,
-                farm_number=f_max+1,
-                within_farm_number=1:s,
-                elisa_a=this_elisa,  # simulated real samples
-                elisa_b=0,
-                pcr=0,  # filler 
-                culture=0,
-                valid_elisa_a=1,
-                valid_elisa_b=0,
-                valid_pcr=0,
-                valid_culture=0)        # filler to square up the data frame
-
-goat_s=goat %>% bind_rows(goat_new)
+# this_elisa=c(rep(0,20))  #  20 total, all negative
+# #this_elisa=c(rep(0,19),1)  #  20 total, 1 positive
+# #this_elisa=c(0, 0, 0, 0, 0, 0)  #  6, all negative
+# #this_elisa=c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  #  11, all negative
+# #this_elisa=rep(0,30)  #  30, all negative
+# s=length(this_elisa)
+# 
+# 
+# 
+# 
+# s_max=max(goat$sample_number)
+# f_max=max(goat$farm_number)
+# 
+# goat_new=tibble(sample_number=1:s + s_max,
+#                 farm_number=f_max+1,
+#                 within_farm_number=1:s,
+#                 elisa_a=this_elisa,  # simulated real samples
+#                 elisa_b=0,
+#                 pcr=0,  # filler 
+#                 culture=0,
+#                 valid_elisa_a=1,
+#                 valid_elisa_b=0,
+#                 valid_pcr=0,
+#                 valid_culture=0)        # filler to square up the data frame
+# 
+# goat_s=goat %>% bind_rows(goat_new)
 ```
 
 
@@ -154,6 +140,9 @@ goat_s=goat %>% bind_rows(goat_new)
 ### Assemble Stan model data
 
 I include here a breakdown table by farm, as it is part of assembling the data structure required to input to the stan code. This table will help us to understand why certain farms are deemed to be higher likelyhood of being infected as well as differing levels of within farm prevelance.
+
+> Farm numbers are as listed in the aggregated data file from Wisconsin.   That data "skips" numbers _19_ and _23_.
+> Likely, we should fix before publication.
 
 ```{r}
 goat_sum=goat %>% rowid_to_column("id") %>% group_by(farm_number) %>%
@@ -165,9 +154,14 @@ The provided information provides the measured data and its structure, along wit
 
 
 
-### Prior information
+### Development of (assumed) Bayesian "prior" information
 
-We use the `PriorGen` package to assist with developing hyperparameters.  The wrapper functions created here allow the text output from that packaage to be used programmatically.
+Bayesian analysis requires that modeled parameters be described by an assumed _prior distribution_.
+The prior can be used to capture problem understanding that exists before data collection.  
+We use both literature review and expert local knowledge to develop the priors for this analysis.
+
+
+We use the `PriorGen` package to assist with developing hyperparameters (the mathematical description of our prior distributions).  The wrapper functions created here allow the text output from that package to be used programmatically.
 
 ```{r }
 my_findbeta=function(...){
@@ -183,25 +177,25 @@ my_findbetamupsi=function(...){
 
 #### Hyperparameter for priors
 
-For several of the hyperparameters, we will use Beta or Gamma distributions as priors, along with expert knowledge to develop informative priors.  We provide several examples, as templates, (with blank informationation), then continue with simply showing the completed information.
+For several of the hyperparameters, we will use Beta or Gamma distributions as priors (the typical approach for the literature for this type of latent class analysis), using expert knowledge to develop informative priors.  
 
 ##### Herd True Prevelance
 
->For HTP hyperparameters: Based on expert opinion, we suspect that the most
->likely value for the fraction of farms with Johnes present in the goat flock is
->about `v1`, and we are **95%** certain that the fraction of infected farms is
->less that `v2`.
 
 ```{r}
 htp1=.3
 htp2=.67
+
+```
+ 
+For HTP hyperparameters: Based on expert opinion, we suspect that the most likely value for the fraction of farms with Johnes present in the goat flock is about `r formattable::percent(htp1)`, and we are **95%** certain that the fraction of infected farms is less that `r formattable::percent(htp2)`.  We model the prior distribution using a beta function, shown below. 
+ 
+```{r}
 htp_hyp=my_findbeta(themode = htp1,percentile.value = htp2,lower.v = TRUE)
 
 #htp_hyp=findbeta(themode = htp1,percentile.value = htp2,lower.v = TRUE)$parameters
 ggfortify::ggdistribution(dbeta,seq(0,1,.005),shape1=htp_hyp[1],shape2=htp_hyp[2])+theme_minimal()
 ```
-
-For HTP hyperparameters: Based on expert opinion, we suspect that the most likely value for the fraction of farms with Johnes present in the goat flock is about `r formattable::percent(htp1)`, and we are **95%** certain that the fraction of infected farms is less that `r formattable::percent(htp2)`.
 
 
 ### Within Herd Prevalence (WHP)
@@ -225,18 +219,18 @@ psi.percentile=v4, percentile.median=v5, percentile95value=v6)
 ```
 
 > Consider herds in this region of study, and consider those farms for which it is known that
-> Johnes is present in that herd.  The fraction of animals on that farm that will be infected
-> would be: the **average** value is thought to be `r formattable::percent(v1)`  and we are 
+> Johnes is present in that herd.  Focusing on the __fraction__ of animals on that farm that will be infected:
+> the **average** value is thought to be `r formattable::percent(v1)`  and we are 
 > `r formattable::percent(v2)` confident that **average value** it is not more than `r formattable::percent(v3)`.
 > Rather than the *average value*, we may estimate an upper bound, such that 
-> `r formattable::percent(v4)` of the infected farm would probably have an infection rate below
-> `r formattable::percent(v5)`, and we are 99% certain that they would not exceed `r formattable::percent(v6)`.
+> `r formattable::percent(v4)` of the infected farms would probably have an infection rate below
+> `r formattable::percent(v5)`, and we are 95% certain that they would not exceed `r formattable::percent(v6)`.
 
 ### Sensitivity and Specificity
 
-We also need prior for sensitivity and specificity for each of the three tests.  One of the challenges here is that we are nominally using the test as measures of the presense of infection.  The tests used here have a good bit of independence (using different biological signals to produce a test outcome) which is an assumption of the statistical model that is used.  However, the infection progression in the body is such that not all of the signals would necessarily be present at the same time, such that the assumption that a "diseased" goat should test positive on all test is not a precise description of the biology.  As such, the effect (in an operational setting) is that the test would typically show lower accuracy than they would compared to the "gold standard" for that particular type of test.  (For example - the manufacturer statements about accuracty for PCR are in comparison to a gold standard PCR test - equivalently does the PCR test being used detect DNA material when bacterial DNA material is actually present in the blood at a level above some known minimum.  The host might be shedding bacteria in the fecal matter at a level which can be cultured even when not detectable in the blood as this shedding results from a different biological process.)
+We also need prior for sensitivity and specificity for each of the three tests.  One of the challenges here is that we are nominally using the test as measures of the presence of infection.  The tests used here have a good bit of independence (using different biological signals to produce a test outcome) which is an assumption of the statistical model that is used.  However, the infection progression in the body is such that not all of the signals would necessarily be present at the same time, such that the assumption that a "diseased" goat should test positive on all test is not a precise description of the biology.  As such, the effect (in an operational setting) is that the test would typically show lower accuracy than they would compared to the "gold standard" for that particular type of test.  (For example - the manufacturer statements about accuracy for PCR are in comparison to a gold standard PCR test - equivalently does the PCR test being used detect DNA material when bacterial DNA material is actually present in the blood at a level above some known minimum.  The host might be shedding bacteria in the fecal matter at a level which can be cultured even when not detectable in the blood as this shedding results from a different biological process.)
 
-To allow for this reduced accuracy within our bayesian analysis, we widen our assumed prior distributions, making them less informative.  We use the modes as suggested, but using 95% intervals that allow for a much broader range of error, allowing that the data might have stronger influence of the posterior distribution.
+To allow for this reduced accuracy within our Bayesian analysis, we widen our assumed prior distributions, making them less informative.  We use the modes as suggested, but using 95% intervals that allow for a much broader range of error, allowing that the data might have stronger influence of the posterior distribution.
 
 For each of these parameters, we use a template that follows this exemplar pattern:
 
@@ -258,8 +252,6 @@ elisa_a_sens=elisa_sens
 elisa_b_sens=elisa_sens
 elisa_a_spec = elisa_spec
 elisa_b_spec = elisa_spec
-
-
 
 ```
 
@@ -313,7 +305,7 @@ fit5=stan(file=here("src","heir_multi_test_B_OOS_2.stan"),data=data5,
           warmup=500,chains=12,iter=2000)
 ```
 
-###  Visualizing results
+##  Results
 
 Primarily, here, I will be showing results with graphs, using a bit of words to describe.  
 
@@ -324,7 +316,7 @@ posterior=as.matrix(fit5)
 ```
 
 
-### Herd True Prevalence
+#### Herd True Prevalence
 
 Herd True Prevalence (HTP) is the fraction of herd with at least one infected animal.
 
@@ -337,16 +329,17 @@ mcmc_areas(posterior,prob=.8,pars="HTP") + plot_title
 For a particular parameter, we can ask for detailed summary information in many different forms.  Below I provide a point estimate (median) along with an 90% hdi interval (highest density interval) estimate.   The median value indicates that about 1/3 of the farms are infected.
 ```{r}
 
-fit5 %>% gather_draws(HTP) %>% median_hdi(.width=.9) %>% flextable()
+fit5 %>% gather_draws(HTP) %>% median_hdi(.width=.9)
+# %>% flextable()
 ```
 
 As this mean value checks (somewhat) with the fraction of herds that had positive test results, we imagine that maybe the model is doing something that we expect.
 
-### Sensitivity and Specificity
+#### Sensitivity and Specificity
 
 A critical goal to this grant, as well as to this analysis overall is ... how accurate are these tests.  Sensitivity and Specificity estimates are an *output* of the model, though we have discussed that they are affected by the assumed prior distributions.  For the analysis shown, the posterior distributions for these measures:
 
-Specificity is very high, though ELISA is much worse than the others.
+Specificity is very high.
 
 ```{r }
 plot_title <- ggtitle("Specificity (Goats)")
@@ -358,7 +351,7 @@ mcmc_areas(posterior,regex_pars=c("spec"))+
 #ggsave(filename=here("figs","spec_goat.png"), width=7.5,height=5,units="cm"   )
 ```
 
-### Sensitivity
+On the other hand, the sensitivity of these test are somewhat lower.
 
 ```{r}
 plot_title <- ggtitle("Sensitivy (Goats)")
@@ -371,20 +364,14 @@ mcmc_areas(posterior,regex_pars=c("sens"))+
 
 ```{r}
 fit5 %>% gather_draws(spec[i],sens[i]) %>% median_hdi(.width=.9) %>% 
-     arrange(.variable) %>%  flextable()
+     arrange(.variable)
+
+# %>%  flextable()
 ```
 
 ### Herd Infection Probability
 
-The way I formulated the model allows me to compute a parameter which I call _herd infection probability_ (HIP), which give the probability that a particular herd has at least one infected animal in the group of animals tested.  (Note the care of wording.  The model is not aware of the total number of animals on the farm, which would be necessary to actually perform this calculation.)
-
-```{r fig.height=5, include=FALSE}
-mcmc_areas(posterior,pars=vars(param_range("HIP",c(1:4))))
-
-```
-
-
-
+The model formulation allows computation of _herd infection probability_ (HIP), which gives the probability that a particular herd has at least one infected animal in the group of animals tested.  (Note the care of wording.  The model is not aware of the total number of animals on the farm, which would be necessary to more properly assess the full herd.)
 
 
 
