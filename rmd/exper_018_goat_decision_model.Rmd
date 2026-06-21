@@ -1,0 +1,254 @@
+---
+title: "Exp 18:Goat decision model v001"
+author: "Joe Skufca"
+date: "2026-05-31"
+output:
+  html_notebook:
+    toc: true
+  word_document:
+    toc: true
+---
+
+Trying to do decision analysis from Raiffa
+
+
+```{r setup}
+options(digits = 3)
+knitr::opts_chunk$set( highlight=T,message=FALSE, warning=FALSE,echo=FALSE)
+
+library(tidyverse)
+library(patchwork)
+library(janitor)
+library(PriorGen)
+library(ggpmisc)
+
+library(here)
+
+library(DT)
+library(flextable)
+
+library(rdecision)
+```
+
+
+
+# The example from Sims  tutorial
+
+```{r}
+cost_diet <- 50.0
+cost_exercise <- 750.0
+cost_stent <- 5000.0
+```
+
+
+```{r}
+decision_node = DecisionNode$new("Programme")
+
+chance_node_diet <- ChanceNode$new("Outcome")
+chance_node_exercise <- ChanceNode$new("Outcome")
+
+leaf_node_diet_no_stent <- LeafNode$new("No intervention")
+leaf_node_diet_stent <- LeafNode$new("Intervention")
+leaf_node_exercise_no_stent <- LeafNode$new("No intervention")
+leaf_node_exercise_stent <- LeafNode$new("Intervention")
+
+
+
+```
+
+
+```{r}
+action_diet <- Action$new(
+  decision_node, chance_node_diet, cost = cost_diet, label = "Diet"
+)
+action_exercise <- Action$new(
+  decision_node, chance_node_exercise, cost = cost_exercise, label = "Exercise"
+)
+```
+
+
+```{r}
+s_diet <- 12L
+f_diet <- 56L
+s_exercise <- 18L
+f_exercise <- 40L
+```
+
+
+```{r}
+ip_diet <- f_diet / (s_diet + f_diet)
+ip_exercise <- f_exercise / (s_exercise + f_exercise)
+nnt <- 1.0 / (ip_diet - ip_exercise)
+
+p_diet <- 1.0 - ip_diet
+p_exercise <- 1.0 - ip_exercise
+
+
+
+```
+
+
+```{r}
+reaction_diet_success <- Reaction$new(
+  chance_node_diet, leaf_node_diet_no_stent,
+  p = p_diet, cost = 0.0, label = "Success"
+)
+
+reaction_diet_failure <- Reaction$new(
+  chance_node_diet, leaf_node_diet_stent,
+  p = NA_real_, cost = cost_stent, label = "Failure"
+)
+
+reaction_exercise_success <- Reaction$new(
+  chance_node_exercise, leaf_node_exercise_no_stent,
+  p = p_exercise, cost = 0.0, label = "Success"
+)
+
+reaction_exercise_failure <- Reaction$new(
+  chance_node_exercise, leaf_node_exercise_stent,
+  p = NA_real_, cost = cost_stent, label = "Failure"
+)
+```
+
+
+```{r}
+dt <- DecisionTree$new(
+  V = list(
+    decision_node,
+    chance_node_diet,
+    chance_node_exercise,
+    leaf_node_diet_no_stent,
+    leaf_node_diet_stent,
+    leaf_node_exercise_no_stent,
+    leaf_node_exercise_stent
+  ),
+  E = list(
+    action_diet,
+    action_exercise,
+    reaction_diet_success,
+    reaction_diet_failure,
+    reaction_exercise_success,
+    reaction_exercise_failure
+  )
+)
+```
+
+
+```{r}
+dt$draw()
+```
+
+```{r}
+rs <- dt$evaluate()
+rs
+```
+
+
+# Raiffa1
+
+
+```{r}
+library(rdecision)
+
+# --- 1. Define Values ---
+pay_win     <- 100.0
+pay_lose    <- 0.0
+pay_safe    <- 40.0
+cost_sample <- 5.0
+
+# --- 2. Create the Nodes ---
+d_root <- DecisionNode$new("Root: Initial Choice")
+l_safe <- LeafNode$new("Safe Payout")
+
+# B. The Immediate Gamble Nodes
+d_gamble    <- DecisionNode$new("Gamble: Which Urn?")
+c_gamble_u1 <- ChanceNode$new("Guess U1 (No Sample)")
+c_gamble_u2 <- ChanceNode$new("Guess U2 (No Sample)")
+
+# C. The Sampling Nodes
+c_sample <- ChanceNode$new("Sample: Draw a Ball")
+d_black  <- DecisionNode$new("Sampled Black: Which Urn?")
+d_red    <- DecisionNode$new("Sampled Red: Which Urn?")
+
+c_b_guess_u1 <- ChanceNode$new("True State (Black -> Guess U1)")
+c_b_guess_u2 <- ChanceNode$new("True State (Black -> Guess U2)")
+c_r_guess_u1 <- ChanceNode$new("True State (Red -> Guess U1)")
+c_r_guess_u2 <- ChanceNode$new("True State (Red -> Guess U2)")
+
+# UNIQUE Leaf Nodes (rdecision requires strict trees, no converging branches)
+l_g_u1_w <- LeafNode$new("Win (Gamble U1)")
+l_g_u1_l <- LeafNode$new("Lose (Gamble U1)")
+l_g_u2_w <- LeafNode$new("Win (Gamble U2)")
+l_g_u2_l <- LeafNode$new("Lose (Gamble U2)")
+
+l_b_u1_w <- LeafNode$new("Win (Black->U1)")
+l_b_u1_l <- LeafNode$new("Lose (Black->U1)")
+l_b_u2_w <- LeafNode$new("Win (Black->U2)")
+l_b_u2_l <- LeafNode$new("Lose (Black->U2)")
+
+l_r_u1_w <- LeafNode$new("Win (Red->U1)")
+l_r_u1_l <- LeafNode$new("Lose (Red->U1)")
+l_r_u2_w <- LeafNode$new("Win (Red->U2)")
+l_r_u2_l <- LeafNode$new("Lose (Red->U2)")
+
+
+# --- 3. Wire the Tree (Create Edges) ---
+
+# Root Actions 
+e_safe   <- Action$new(d_root, l_safe, cost = -pay_safe, label = "Take Safe ($40)")
+e_gamble <- Action$new(d_root, d_gamble, cost = 0.0, label = "Gamble Immediately")
+e_sample <- Action$new(d_root, c_sample, cost = cost_sample, label = "Sample ($5)")
+
+# Immediate Gamble Edges (Prior Probabilities: 50/50)
+e_g_u1      <- Action$new(d_gamble, c_gamble_u1, label = "Guess Urn 1")
+e_g_u2      <- Action$new(d_gamble, c_gamble_u2, label = "Guess Urn 2")
+e_g_u1_win  <- Reaction$new(c_gamble_u1, l_g_u1_w, p = 0.5, cost = -pay_win, label = "Is Urn 1")
+e_g_u1_lose <- Reaction$new(c_gamble_u1, l_g_u1_l, p = 0.5, cost = -pay_lose, label = "Is Urn 2")
+e_g_u2_win  <- Reaction$new(c_gamble_u2, l_g_u2_w, p = 0.5, cost = -pay_win, label = "Is Urn 2")
+e_g_u2_lose <- Reaction$new(c_gamble_u2, l_g_u2_l, p = 0.5, cost = -pay_lose, label = "Is Urn 1")
+
+# Sampling Edges (Chance of drawing Red or Black is 50/50)
+e_draw_b <- Reaction$new(c_sample, d_black, p = 0.5, label = "Draw Black")
+e_draw_r <- Reaction$new(c_sample, d_red, p = 0.5, label = "Draw Red")
+
+# Decisions After Drawing a BLACK Ball (Posteriors: 70% U1, 30% U2)
+e_b_u1      <- Action$new(d_black, c_b_guess_u1, label = "Guess Urn 1")
+e_b_u2      <- Action$new(d_black, c_b_guess_u2, label = "Guess Urn 2")
+e_b_u1_win  <- Reaction$new(c_b_guess_u1, l_b_u1_w, p = 0.7, cost = -pay_win, label = "Is Urn 1")
+e_b_u1_lose <- Reaction$new(c_b_guess_u1, l_b_u1_l, p = 0.3, cost = -pay_lose, label = "Is Urn 2")
+e_b_u2_lose <- Reaction$new(c_b_guess_u2, l_b_u2_l, p = 0.7, cost = -pay_lose, label = "Is Urn 1")
+e_b_u2_win  <- Reaction$new(c_b_guess_u2, l_b_u2_w, p = 0.3, cost = -pay_win, label = "Is Urn 2")
+
+# Decisions After Drawing a RED Ball (Posteriors: 30% U1, 70% U2)
+e_r_u1      <- Action$new(d_red, c_r_guess_u1, label = "Guess Urn 1")
+e_r_u2      <- Action$new(d_red, c_r_guess_u2, label = "Guess Urn 2")
+e_r_u1_win  <- Reaction$new(c_r_guess_u1, l_r_u1_w, p = 0.3, cost = -pay_win, label = "Is Urn 1")
+e_r_u1_lose <- Reaction$new(c_r_guess_u1, l_r_u1_l, p = 0.7, cost = -pay_lose, label = "Is Urn 2")
+e_r_u2_lose <- Reaction$new(c_r_guess_u2, l_r_u2_l, p = 0.3, cost = -pay_lose, label = "Is Urn 1")
+e_r_u2_win  <- Reaction$new(c_r_guess_u2, l_r_u2_w, p = 0.7, cost = -pay_win, label = "Is Urn 2")
+
+# --- 4. Build and Evaluate ---
+dt <- DecisionTree$new(
+  V = list(d_root, l_safe, d_gamble, c_gamble_u1, c_gamble_u2, 
+           c_sample, d_black, d_red, c_b_guess_u1, c_b_guess_u2, 
+           c_r_guess_u1, c_r_guess_u2, 
+           l_g_u1_w, l_g_u1_l, l_g_u2_w, l_g_u2_l,
+           l_b_u1_w, l_b_u1_l, l_b_u2_w, l_b_u2_l,
+           l_r_u1_w, l_r_u1_l, l_r_u2_w, l_r_u2_l),
+  E = list(e_safe, e_gamble, e_sample, e_g_u1, e_g_u2, e_g_u1_win, e_g_u1_lose, 
+           e_g_u2_win, e_g_u2_lose, e_draw_b, e_draw_r, e_b_u1, e_b_u2, 
+           e_b_u1_win, e_b_u1_lose, e_b_u2_lose, e_b_u2_win, e_r_u1, e_r_u2, 
+           e_r_u1_win, e_r_u1_lose, e_r_u2_lose, e_r_u2_win)
+)
+
+# Look at the 'Cost' column for expected payouts (represented as negatives)
+cat("Optimal Baseline Strategy Evaluation:\n")
+print(dt$evaluate())
+```
+
+```{r}
+dt$draw()
+```
+
+
+
