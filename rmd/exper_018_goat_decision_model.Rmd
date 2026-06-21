@@ -251,4 +251,193 @@ dt$draw()
 ```
 
 
+## Wildcatter
+
+```{r}
+# ==============================================================================
+# 1. SETUP & BAYESIAN INFERENCE (BASE R)
+# ==============================================================================
+library(rdecision)
+
+# Prior probabilities of the ground state: P(State)
+priors <- c(Dry = 0.5, Wet = 0.3, Soaking = 0.2)
+
+# Likelihood Matrix: P(Test Result | Ground State)
+likelihoods <- matrix(
+  c(0.6, 0.3, 0.1,  # P(Result | Dry)
+    0.3, 0.4, 0.3,  # P(Result | Wet)
+    0.1, 0.3, 0.6), # P(Result | Soaking)
+  nrow = 3, byrow = TRUE,
+  dimnames = list(Result = c("Diffuse", "Open", "Closed"), 
+                  State = c("Dry", "Wet", "Soaking"))
+)
+
+# Compute Joint, Marginal, and Posterior Probabilities
+joint <- likelihoods * rep(priors, each = 3)
+marginals <- rowSums(joint)
+posteriors <- joint / marginals
+
+# Financial constants
+cost_test  <- -10000    
+cost_drill <- -70000    
+
+payoff_dry   <- 0       
+payoff_wet   <- 120000  
+payoff_soak  <- 270000  
+
+# ==============================================================================
+# 2. BUILDING THE DECISION TREE (rdecision)
+# ==============================================================================
+
+# --- A. Define Nodes ---
+d_root <- DecisionNode$new("Test?")
+c_test_outcome <- ChanceNode$new("Test Outcome")
+
+d_no_test    <- DecisionNode$new("Drill? (No Test)")
+d_if_diffuse <- DecisionNode$new("Drill? (Diffuse)")
+d_if_open    <- DecisionNode$new("Drill? (Open)")
+d_if_closed  <- DecisionNode$new("Drill? (Closed)")
+
+c_state_notest  <- ChanceNode$new("Oil State (No Test)")
+c_state_diffuse <- ChanceNode$new("Oil State (Diffuse)")
+c_state_open    <- ChanceNode$new("Oil State (Open)")
+c_state_closed  <- ChanceNode$new("Oil State (Closed)")
+
+# --- B. Define UNIQUE Terminal Leaf Nodes ---
+# Leaf nodes for NO TEST path
+leaf_abort   <- LeafNode$new("Walked Away ($0)")
+leaf_nt_dry  <- LeafNode$new("No-Test Dry Well")
+leaf_nt_wet  <- LeafNode$new("No-Test Wet Well")
+leaf_nt_soak <- LeafNode$new("No-Test Soaking Well")
+
+# Leaf nodes for DIFFUSE test path
+leaf_abort_diffuse <- LeafNode$new("Walked Away (Diffuse, -$10k)")
+leaf_dif_dry       <- LeafNode$new("Diffuse Tested Dry")
+leaf_dif_wet       <- LeafNode$new("Diffuse Tested Wet")
+leaf_dif_soak      <- LeafNode$new("Diffuse Tested Soaking")
+
+# Leaf nodes for OPEN test path
+leaf_abort_open <- LeafNode$new("Walked Away (Open, -$10k)")
+leaf_op_dry     <- LeafNode$new("Open Tested Dry")
+leaf_op_wet     <- LeafNode$new("Open Tested Wet")
+leaf_op_soak    <- LeafNode$new("Open Tested Soaking")
+
+# Leaf nodes for CLOSED test path
+leaf_abort_closed <- LeafNode$new("Walked Away (Closed, -$10k)")
+leaf_cl_dry       <- LeafNode$new("Closed Tested Dry")
+leaf_cl_wet       <- LeafNode$new("Closed Tested Wet")
+leaf_cl_soak      <- LeafNode$new("Closed Tested Soaking")
+
+
+# --- C. Define Edges (Branches) ---
+edge_action_test   <- Action$new(d_root, c_test_outcome, cost = cost_test, label = "Test")
+edge_action_notest <- Action$new(d_root, d_no_test, cost = 0, label = "Don't Test")
+
+edge_res_diffuse <- Reaction$new(c_test_outcome, d_if_diffuse, p = marginals["Diffuse"], label = "Diffuse")
+edge_res_open    <- Reaction$new(c_test_outcome, d_if_open, p = marginals["Open"], label = "Open")
+edge_res_closed  <- Reaction$new(c_test_outcome, d_if_closed, p = marginals["Closed"], label = "Closed")
+
+# Drill Choices under NO TEST
+edge_nt_abort <- Action$new(d_no_test, leaf_abort, cost = 0, label = "No Drill")
+edge_nt_drill <- Action$new(d_no_test, c_state_notest, cost = cost_drill, label = "Drill")
+
+# Drill Choices under DIFFUSE path
+edge_diffuse_abort <- Action$new(d_if_diffuse, leaf_abort_diffuse, cost = 0, label = "No Drill")
+edge_diffuse_drill <- Action$new(d_if_diffuse, c_state_diffuse, cost = cost_drill, label = "Drill")
+
+# Drill Choices under OPEN path
+edge_open_abort <- Action$new(d_if_open, leaf_abort_open, cost = 0, label = "No Drill")
+edge_open_drill <- Action$new(d_if_open, c_state_open, cost = cost_drill, label = "Drill")
+
+# Drill Choices under CLOSED path
+edge_closed_abort <- Action$new(d_if_closed, leaf_abort_closed, cost = 0, label = "No Drill")
+edge_closed_drill <- Action$new(d_if_closed, c_state_closed, cost = cost_drill, label = "Drill")
+
+
+# --- D. Map Chance Outcomes ---
+# Under NO TEST path (Priors)
+r_nt_dry  <- Reaction$new(c_state_notest, leaf_nt_dry, p = priors["Dry"], benefit = payoff_dry, label = "Dry")
+r_nt_wet  <- Reaction$new(c_state_notest, leaf_nt_wet, p = priors["Wet"], benefit = payoff_wet, label = "Wet")
+r_nt_soak <- Reaction$new(c_state_notest, leaf_nt_soak, p = priors["Soaking"], benefit = payoff_soak, label = "Soaking")
+
+# Under DIFFUSE path (Diffuse Posteriors)
+r_dif_dry  <- Reaction$new(c_state_diffuse, leaf_dif_dry, p = posteriors["Diffuse", "Dry"], benefit = payoff_dry, label = "Dry")
+r_dif_wet  <- Reaction$new(c_state_diffuse, leaf_dif_wet, p = posteriors["Diffuse", "Wet"], benefit = payoff_wet, label = "Wet")
+r_dif_soak <- Reaction$new(c_state_diffuse, leaf_dif_soak, p = posteriors["Diffuse", "Soaking"], benefit = payoff_soak, label = "Soaking")
+
+# Under OPEN path (Open Posteriors)
+r_op_dry  <- Reaction$new(c_state_open, leaf_op_dry, p = posteriors["Open", "Dry"], benefit = payoff_dry, label = "Dry")
+r_op_wet  <- Reaction$new(c_state_open, leaf_op_wet, p = posteriors["Open", "Wet"], benefit = payoff_wet, label = "Wet")
+r_op_soak <- Reaction$new(c_state_open, leaf_op_soak, p = posteriors["Open", "Soaking"], benefit = payoff_soak, label = "Soaking")
+
+# Under CLOSED path (Closed Posteriors)
+r_cl_dry  <- Reaction$new(c_state_closed, leaf_cl_dry, p = posteriors["Closed", "Dry"], benefit = payoff_dry, label = "Dry")
+r_cl_wet  <- Reaction$new(c_state_closed, leaf_cl_wet, p = posteriors["Closed", "Wet"], benefit = payoff_wet, label = "Wet")
+r_cl_soak <- Reaction$new(c_state_closed, leaf_cl_soak, p = posteriors["Closed", "Soaking"], benefit = payoff_soak, label = "Soaking")
+
+
+# ==============================================================================
+# 3. SOLVE AND PRINT THE PATHWAY ANALYSIS
+# ==============================================================================
+
+# Compile completely separate elements into the node list
+nodes_list <- list(
+  d_root, c_test_outcome, d_no_test, d_if_diffuse, d_if_open, d_if_closed,
+  c_state_notest, c_state_diffuse, c_state_open, c_state_closed,
+  leaf_abort, leaf_nt_dry, leaf_nt_wet, leaf_nt_soak,
+  leaf_abort_diffuse, leaf_dif_dry, leaf_dif_wet, leaf_dif_soak,
+  leaf_abort_open, leaf_op_dry, leaf_op_wet, leaf_op_soak,
+  leaf_abort_closed, leaf_cl_dry, leaf_cl_wet, leaf_cl_soak
+)
+
+edges_list <- list(
+  edge_action_test, edge_action_notest, edge_res_diffuse, edge_res_open, edge_res_closed,
+  edge_nt_abort, edge_nt_drill, edge_diffuse_abort, edge_diffuse_drill,
+  edge_open_abort, edge_open_drill, edge_closed_abort, edge_closed_drill,
+  r_nt_dry, r_nt_wet, r_nt_soak, r_dif_dry, r_dif_wet, r_dif_soak,
+  r_op_dry, r_op_wet, r_op_soak, r_cl_dry, r_cl_wet, r_cl_soak
+)
+
+tree <- DecisionTree$new(V = nodes_list, E = edges_list)
+
+# CRITICAL FIX: Evaluate by "path" to unlock individual branch breakdowns
+results <- tree$evaluate(by = "path")
+
+# Select the exact valid column headers generated by rdecision's path mode
+clean_summary <- results[, c("Leaf", "Probability", "Cost", "Benefit", "Utility")]
+
+# Print the final result matrix
+print(clean_summary)
+
+
+```
+
+
+```{r}
+tree$draw()
+
+```
+
+
+```{r}
+# ==============================================================================
+# 4. CONDENSE AND DISPLAY THE OPTIMAL STRATEGY
+# ==============================================================================
+
+# 1. Evaluate by strategy (default), which folds back and rolls up the tree
+strat_results <- tree$evaluate()
+
+# 2. Sort the strategies from highest expected profit to lowest
+strat_sorted <- strat_results[order(-strat_results$Cost - strat_results$Benefit), ]
+
+# 3. Clean up column names for readability (replaces punctuation with spaces)
+colnames(strat_sorted) <- gsub("\\.", " ", colnames(strat_sorted))
+
+# 4. Extract and print only the top-performing strategy profile
+# This isolates the optimal path and displays its rolled-up financial metrics
+winning_strategy <- head(strat_sorted, 1)
+
+print(winning_strategy)
+```
+
 
